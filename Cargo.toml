@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["ai-core", "edge-sdk", "cli/ai"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = 2
+strip = true

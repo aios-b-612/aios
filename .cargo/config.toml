@@ -1,0 +1,5 @@
+# Cross-compile configuration for the Redox target (host builds use the
+# upstream prefix toolchain from redox-os/prefix; native builds need nothing).
+[target.x86_64-unknown-redox]
+# Pointed at the prefix cross-gcc (set below via env in build-redox.sh).
+linker = "x86_64-unknown-redox-gcc"
