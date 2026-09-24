@@ -120,6 +120,16 @@
 
 ---
 
+## ADR-017 — Cache global de modelos com escrita liberada (1777)
+
+- **Contexto**: na Fase 3, `ai install hello-1b` falhou in-guest com `i/o: Permission denied (os error 13)`: `user` (uid 1000) não podia gravar em `/var/lib/ai` e `/var/lib/ai/models` (modo 755 root-owned), onde vivem o cache global e o registry `registry.tsv`.
+- **Decisão**: `/var/lib/ai` e `/var/lib/ai/models` são criados com modo **1777** (sticky, world-writable) na imagem; `ai install/remove` gravam no cache global sem privilégios. É uma decisão de empacotamento da imagem, não do runtime: o daemon de runtime (Fase 4) e o CLI exigem que o único usuário do dispositivo consiga gerenciar modelos.
+- **Consequências**: + gerenciamento de modelos sem sudo/root no Edge AI OS; + self-contained em device single-user; - segurança de multi-usuário deliberadamente não priorizada (dispositivo dedicado; reavaliar se um dia AIOS suportar multi-user como o Redox vanilla).
+- **Status**: Aceito (2026-09-24).
+- **Referência**: Fase 3 smoke-test; perms aplicadas na imagem manualmente até o rebuild incorporar `chmod 1777` na receita.
+
+---
+
 ## Decisões Rejeitadas (e por quê)
 
 - **Rejeitado**: "Fork próprio do kernel" (ADR-001).

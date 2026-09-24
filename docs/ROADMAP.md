@@ -62,12 +62,12 @@
 
 **Entregas**:
 - [x] Crate `aios-core` (runtime abstraction, model meta, cache, checksum, registry).
-- [ ] CLI `ai` (list/info/install/remove/run/serve/stop/benchmark/inspect).
+- [x] CLI `ai` (list/info/install/remove/run/serve/stop/benchmark/inspect).
 - [x] GGUF metadata parser (Rust puro) + `ai inspect model.gguf`.
 - [ ] Backend CPU via Candle (primeiro) — validar compilação no target `-unknown-redox`.
-- [ ] `ai-sdk` básico (`ai::load`, `model.generate`).
+- [x] `ai-sdk` básico (`ai::load` funcional; `model.generate` placeholder até Fase 4).
 
-**Status**: workspace criado (`aios/`); `aios-core` (parser header GGUF tipos 0–12, SHA-256 puro, model meta, cache discovery, registry TSV) e `aios-sdk` stub prontos; CLI `ai` (list/inspect/verify/doctor) funcional. **Build nativo OK** (`cargo build/test`, vetores SHA-256 validados) e **cross-compilação `x86_64-unknown-redox` OK** via `scripts/build-redox.sh` (prefix toolchain; binário ELF estático redox). **Smoke-test in-guest PASS (KVM)**: binário `ai` injetado na imagem (`/usr/bin/ai`) + modelo `hello-1b.gguf` em `/var/lib/ai/models`; `ai list/inspect/verify` rodaram dentro do OS com checksum SHA-256 idêntico ao host. Pendências: comandos restantes do CLI (install/remove/run/serve/stop/benchmark), backend CPU (Candle) ainda não validado no target, e **rebuild da imagem** para o marker `/etc/ai-platform` refletir o rename de branding (`aios-developer-os`).
+**Status**: workspace criado (`aios/`); `aios-core` (parser header GGUF tipos 0–12, SHA-256 puro, model meta, cache, registry TSV) e `aios-sdk` (`load` resolve modelo via registry + cache) prontos; CLI `ai` completo para a fase (list/inspect/verify/install/remove/info/benchmark/doctor; `run`/`serve`/`stop` recusam com erro explícito "requires Fase 4). **Build nativo OK** — 10 testes (aios-core 6 + aios-sdk 4) cobrindo roundtrip install/remove (recusa deletar fora do cache), rejeição de nomes inválidos, load via registry/cache. Env overrides `AIOS_MODELS_DIR`/`AIOS_REGISTRY` para host/dev/testes. **Cross-compilação `x86_64-unknown-redox` release OK** (ELF estático, 546.480 B stripped). **Smoke-test in-guest PASS (KVM)**: binário `ai` + `hello-1b.gguf` injetados; `list/info/install/remove/benchmark` rodaram dentro do OS (install/remove com roundtrip real em `/var/lib/ai/models`; benchmark reportou ~124k parse/s e ~36 MiB/s SHA-256). Exigiu `chmod 1777` em `/var/lib/ai` e `/var/lib/ai/models` (usuário `user` uid 1000 precisa gravar cache global — ADR-017). Pendências: backend CPU (Candle) ainda não validado no target e **rebuild da imagem** para o marker `/etc/ai-platform` refletir o rename de branding (`aios-developer-os`).
 
 **Critério**: carregar metadata GGUF, validar checksum, listar/instalar/remover modelos no cache local; `ai benchmark` roda um SLM básico e reporta latência/tokens per sec. Tudo offline.
 

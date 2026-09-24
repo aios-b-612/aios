@@ -13,9 +13,12 @@ pub mod gguf;
 pub mod model;
 pub mod registry;
 
-pub use cache::{list_installed, find_models, DEFAULT_MODELS_DIR};
+pub use cache::{
+    cache_path_for, default_models_dir, default_name_for, find_models, install_model, is_gguf_file,
+    list_installed, remove_model, DEFAULT_MODELS_DIR,
+};
 pub use checksum::{sha256_hex, Sha256};
 pub use error::{Error, Result};
 pub use gguf::{GgufHeader, Value, ValueType};
 pub use model::{pretty_bytes, ModelMeta};
-pub use registry::{Registry, RegistryEntry, DEFAULT_REGISTRY_FILE};
+pub use registry::{default_registry_file, Registry, RegistryEntry, DEFAULT_REGISTRY_FILE};

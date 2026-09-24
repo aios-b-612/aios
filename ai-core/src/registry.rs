@@ -11,6 +11,12 @@ use std::path::PathBuf;
 
 pub const DEFAULT_REGISTRY_FILE: &str = "/var/lib/ai/registry.tsv";
 
+/// Registry file used by the CLI: env `AIOS_REGISTRY` overrides the default
+/// (host development / test isolation).
+pub fn default_registry_file() -> String {
+    std::env::var("AIOS_REGISTRY").unwrap_or_else(|_| DEFAULT_REGISTRY_FILE.to_string())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryEntry {
     pub name: String,

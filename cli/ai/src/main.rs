@@ -1,23 +1,37 @@
 //! AIOS `ai` CLI.
 //!
 //! Subcommands:
-//!   list     - list installed models (cache dir + registry)
-//!   inspect  - print GGUF header of a model file (magic, version, tensors, metadata KV)
-//!   verify   - compute and print the SHA-256 of a model file
-//!   doctor   - environment checks (toolchain, cache dir, registry)
+//!   list       - list installed models (cache dir + registry)
+//!   install    - copy a GGUF into the cache and register it
+//!   remove     - unregister and delete a model from the cache
+//!   info       - details about an installed model (registry + file)
+//!   inspect    - print GGUF header of a model file (magic, version, tensors, metadata KV)
+//!   verify     - compute and print the SHA-256 of a model file
+//!   benchmark  - Fase 3 micro-benchmark (GGUF parse + SHA-256 throughput)
+//!   run        - (Fase 4) run inference
+//!   serve      - (Fase 4) expose a local HTTP endpoint
+//!   stop       - (Fase 4) stop a running model/server
+//!   doctor     - environment checks (toolchain, cache dir, registry)
 
-use aios_core::cache::DEFAULT_MODELS_DIR;
+use aios_core::default_models_dir;
 use aios_core::gguf::ValueType;
-use aios_core::{self, find_models, list_installed, pretty_bytes, Registry};
+use aios_core::{self, cache_path_for, find_models, install_model, list_installed, pretty_bytes, remove_model, Registry, RegistryEntry};
+use std::io::Read;
 use std::path::Path;
+use std::time::Instant;
 
 const USAGE: &str = "\
 AIOS ai - model cache and inspection CLI
 
 Usage:
-  ai list  [--dir DIR]
+  ai list                  [--dir DIR]
+  ai install <file.gguf>   [name] [--dir DIR]
+  ai remove <name>         [--dir DIR]
+  ai info <name>           [--dir DIR]
   ai inspect <file.gguf>
   ai verify <file.gguf>
+  ai benchmark <file.gguf> [--iter N]
+  ai run | serve | stop    (requires Fase 4 inference backend)
   ai doctor
 ";
 
@@ -29,8 +43,13 @@ fn main() {
     }
     let code = match args[0].as_str() {
         "list" => cmd_list(&args[1..]),
+        "install" => cmd_install(&args[1..]),
+        "remove" => cmd_remove(&args[1..]),
+        "info" => cmd_info(&args[1..]),
         "inspect" => cmd_inspect(&args[1..]),
         "verify" => cmd_verify(&args[1..]),
+        "benchmark" => cmd_benchmark(&args[1..]),
+        "run" | "serve" | "stop" => cmd_fase4(&args[0]),
         "doctor" => cmd_doctor(),
         "help" | "-h" | "--help" => {
             eprintln!("{USAGE}");
@@ -44,8 +63,183 @@ fn main() {
     std::process::exit(code);
 }
 
+/// Parse a `--dir DIR` argument from a positional arg stream.
+fn take_dir<'a>(args: &'a [String], i: &mut usize, default: &str) -> Result<String, String> {
+    if args.get(*i).map(|a| a.as_str()) == Some("--dir") {
+        *i += 1;
+        args.get(*i)
+            .map(|s| s.clone())
+            .ok_or_else(|| "--dir requires a path".to_string())
+    } else {
+        Ok(default.to_string())
+    }
+}
+
+fn cmd_install(args: &[String]) -> i32 {
+    let Some(src) = args.first() else {
+        eprintln!("usage: ai install <file.gguf> [name] [--dir DIR]");
+        return 2;
+    };
+    let mut name: Option<String> = None;
+    let mut dir = default_models_dir();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--dir" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--dir requires a path");
+                    return 2;
+                }
+                dir = args[i].clone();
+            }
+            other if name.is_none() => {
+                name = Some(other.to_string());
+            }
+            other => {
+                eprintln!("unexpected argument: {other}");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+
+    let name = name.unwrap_or_else(|| aios_core::default_name_for(Path::new(src)));
+
+    println!("Installing {src} as '{name}' in {dir}...");
+    match install_model(Path::new(src), Path::new(&dir), &name) {
+        Ok(entry) => {
+            let mut reg = match Registry::load(aios_core::default_registry_file()) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("error: registry: {e}");
+                    return 1;
+                }
+            };
+            reg.add(entry.clone());
+            if let Err(e) = reg.save() {
+                eprintln!("error: saving registry: {e}");
+                return 1;
+            }
+            println!("  name:   {name}");
+            println!("  path:   {}", entry.path);
+            println!("  sha256: {}", entry.sha256);
+            println!("  size:   {} ({} bytes)", pretty_bytes(entry.size_bytes), entry.size_bytes);
+            println!("Installed.");
+            0
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+fn cmd_remove(args: &[String]) -> i32 {
+    let Some(name) = args.first() else {
+        eprintln!("usage: ai remove <name> [--dir DIR]");
+        return 2;
+    };
+    let dir = registry_dir(args);
+
+    let mut reg = match Registry::load(aios_core::default_registry_file()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: registry: {e}");
+            return 1;
+        }
+    };
+
+    if let Some(entry) = reg.find(name) {
+        let entry = entry.clone();
+        if let Err(e) = remove_model(&entry, Path::new(&dir)) {
+            eprintln!("error: {e}");
+            return 1;
+        }
+        reg.remove(name);
+        if let Err(e) = reg.save() {
+            eprintln!("error: saving registry: {e}");
+            return 1;
+        }
+        println!("Removed {name} ({}).", entry.path);
+        return 0;
+    }
+
+    // Not registered: try a plain cache file with this name.
+    let guess = cache_path_for(Path::new(&dir), name);
+    if guess.exists() {
+        if let Err(e) = remove_model(
+            &RegistryEntry {
+                name: name.to_string(),
+                path: guess.display().to_string(),
+                sha256: String::new(),
+                size_bytes: 0,
+            },
+            Path::new(&dir),
+        ) {
+            eprintln!("error: {e}");
+            return 1;
+        }
+        println!("Removed unregistered model {name}.");
+        return 0;
+    }
+
+    eprintln!("error: model '{name}' not found in registry or {dir}");
+    1
+}
+
+fn cmd_info(args: &[String]) -> i32 {
+    let Some(name) = args.first() else {
+        eprintln!("usage: ai info <name> [--dir DIR]");
+        return 2;
+    };
+    let dir = registry_dir(args);
+
+    let reg = match Registry::load(aios_core::default_registry_file()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: registry: {e}");
+            return 1;
+        }
+    };
+
+    if let Some(e) = reg.find(name) {
+        let exists = Path::new(&e.path).exists();
+        println!("Name:        {name}");
+        println!("Registered:  yes");
+        println!("Path:        {}", e.path);
+        println!("Size:        {} ({} bytes)", pretty_bytes(e.size_bytes), e.size_bytes);
+        println!("SHA-256:     {}", e.sha256);
+        println!("On disk:     {}", if exists { "yes" } else { "no" });
+        return if exists { 0 } else { 1 };
+    }
+
+    let guess = cache_path_for(Path::new(&dir), name);
+    if guess.exists() {
+        let size = std::fs::metadata(&guess).map(|m| m.len()).unwrap_or(0);
+        println!("Name:        {name}");
+        println!("Registered:  no");
+        println!("Path:        {}", guess.display());
+        println!("Size:        {} ({} bytes)", pretty_bytes(size), size);
+        return 0;
+    }
+
+    eprintln!("error: model '{name}' not found in registry or {dir}");
+    1
+}
+
+fn registry_dir(args: &[String]) -> String {
+    let mut d = default_models_dir();
+    let mut i = 0;
+    match take_dir(args, &mut i, &d) {
+        Ok(nd) => d = nd,
+        Err(e) => eprintln!("{e}"),
+    }
+    d
+}
+
 fn cmd_list(args: &[String]) -> i32 {
-    let mut dir = DEFAULT_MODELS_DIR.to_string();
+    let mut dir = default_models_dir();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -83,10 +277,11 @@ fn cmd_list(args: &[String]) -> i32 {
                 );
             }
 
-            match Registry::load(aios_core::registry::DEFAULT_REGISTRY_FILE) {
+            let reg_file = aios_core::default_registry_file();
+            match Registry::load(&reg_file) {
                 Ok(reg) => {
                     if !reg.entries().is_empty() {
-                        println!("\nRegistry ({}):", aios_core::registry::DEFAULT_REGISTRY_FILE);
+                        println!("\nRegistry ({reg_file}):");
                         for e in reg.entries() {
                             println!("  {:<28} {:<20} {}", e.name, e.sha256[..10.min(e.sha256.len())].to_string(), pretty_bytes(e.size_bytes));
                         }
@@ -159,6 +354,95 @@ fn cmd_verify(args: &[String]) -> i32 {
     0
 }
 
+/// Fase 3 micro-benchmark of the metadata/checksum path (the only CPU work
+/// available before the inference backend). Reports parse rate and SHA-256
+/// throughput as a baseline; inference benchmarks arrive in Fase 4.
+fn cmd_benchmark(args: &[String]) -> i32 {
+    let Some(path) = args.first() else {
+        eprintln!("usage: ai benchmark <file.gguf> [--iter N]");
+        return 2;
+    };
+    let mut iter = 200usize;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--iter" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--iter requires a number");
+                    return 2;
+                }
+                iter = args[i].parse().unwrap_or(200);
+            }
+            other => {
+                eprintln!("unexpected argument: {other}");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+
+    // Parse benchmark: header only (the full tensor data does not need parsing).
+    let head: Vec<u8> = {
+        let mut file = file;
+        const HEAD: usize = 1 << 20;
+        let mut buf = vec![0u8; HEAD];
+        match file.read(&mut buf) {
+            Ok(n) => buf[..n].to_vec(),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 1;
+            }
+        }
+    };
+    let n_parse = iter;
+    let t0 = Instant::now();
+    let mut parsed_ok = 0usize;
+    for _ in 0..n_parse {
+        if aios_core::gguf::parse_header(&head).is_ok() {
+            parsed_ok += 1;
+        }
+    }
+    let parse_secs = t0.elapsed().as_secs_f64();
+
+    // SHA-256 throughput on a sample sized to the file.
+    let n_hash = iter;
+    let t1 = Instant::now();
+    for _ in 0..n_hash {
+        aios_core::checksum::sha256_hex(head.as_slice()).ok();
+    }
+    let hash_secs = t1.elapsed().as_secs_f64();
+    let total_bytes = (head.len() as u64) * (n_hash as u64);
+    let mib_per_s = (total_bytes as f64) / (1 << 20) as f64 / hash_secs;
+
+    println!("AIOS ai benchmark (Fase 3: metadata/checksum path)");
+    println!("  file:               {path}");
+    println!("  size:               {} ({} bytes)", pretty_bytes(size), size);
+    println!("  iter:               {iter}");
+    println!("  GGUF parse:         {parsed_ok}/{n_parse} ok, {:.1} parse/s", n_parse as f64 / parse_secs.max(1e-9));
+    println!("  SHA-256:            {:.2} MiB/s (sample {} bytes)", mib_per_s, head.len());
+    println!("note: inference benchmark arrives with the Fase 4 backend.");
+    0
+}
+
+fn cmd_fase4(name: &str) -> i32 {
+    eprintln!(
+        "error: 'ai {name}' requires the Fase 4 inference backend, which is not \
+         implemented yet (see docs/ROADMAP.md). Available now: list, install, \
+         remove, info, inspect, verify, benchmark, doctor."
+    );
+    1
+}
+
 fn cmd_doctor() -> i32 {
     fn present(name: &str, path: &str) {
         let ok = std::process::Command::new(path)
@@ -176,8 +460,9 @@ fn cmd_doctor() -> i32 {
     present("gcc", "gcc");
 
     println!("\nCache:");
-    let dir = Path::new(DEFAULT_MODELS_DIR);
-    println!("  models dir {DEFAULT_MODELS_DIR:24} [{}]", if dir.is_dir() { "OK" } else { "missing" });
+    let models_dir = default_models_dir();
+    let dir = Path::new(&models_dir);
+    println!("  models dir {models_dir:24} [{}]", if dir.is_dir() { "OK" } else { "missing" });
     match find_models(dir) {
         Ok(list) => println!("  found {} model(s)", list.len()),
         Err(e) => println!("  error scanning: {e}"),
