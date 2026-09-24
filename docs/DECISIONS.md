@@ -32,7 +32,7 @@
 - **Status**: Aceito
 - **Contexto**: Auditoria: x86_64 maduro, aarch64 funcional no QEMU, RPi 3B+ "boot", RPi 4/5 não validados. Wi-Fi e Bluetooth não suportados. **Validado em Fase 1 (2026-09-24)**: QEMU aarch64 boots até kernel+initfs, mas o daemon `nvmed` initfs estoura a stack (guard page) no master ⇒ `/usr` não monta ⇒ sem login. Upstream não faz CI de boot aarch64.
 - **Decisão**: Desenvolvimento em x86_64; validação ARM em QEMU virt (aarch64); hardware Raspberry Pi apenas quando boot real comprovado (começando RPi 3B+). Proibido "fake support".
-- **Consequências**: Produto confiável; RPi 4/5 não prometido até validação. Edge OS aarch64: imagem constrói e canário de boot (bootloader+kernel) passa; userland bloqueada por bug upstream — monitorar/fix com upstream antes de Fase 5.
+- **Consequências**: Produto confiável; RPi 4/5 não prometido até validação. Edge OS aarch64: imagem constrói e canário de boot (bootloader+kernel) passa; userland bloqueada por bug upstream — monitorar (aguardar correção upstream; sem contribuir) antes de Fase 5.
 
 ## ADR-005 — Isolamento via `contain` + schemes, sem sandbox fake
 
@@ -94,8 +94,8 @@
 
 - **Status**: Aceito
 - **Contexto**: Toolchain `rust` self-hosted presente no perfil `ai-developer` e binários executam, mas `rustc` crasha com `UNHANDLED EXCEPTION` (kernel) ao compilar de verdade sob QEMU/KVM (audit §2.15). Padrão já visto no aarch64 (initfs `nvmed` estoura stack). Upstream só cobre TCG/podman/repo-tree; não valida esse perfil sob KVM+serial.
-- **Decisão**: Não prometer "dev/build sel-hosted funcional dentro do OS" até demonstrado em bootstrap limpo (KVM e depois hardware nativo). Tratar instabilidade de userland sob emulação como risco de plataforma (não da nossa config) e reportar upstream. Critério da Fase 2 fica "parcial" até lá.
-- **Consequências**: Fase 2 (build self-hosted) dependente de upstream; caminhos de   mitigação: testar (a) TCG puro, (b) hardware nativo via `cookbook` local, (c) tentar alloc fixer/reportar kernel; usuário escolhe.
+- **Decisão**: Não prometer "dev/build sel-hosted funcional dentro do OS" até demonstrado em bootstrap limpo (KVM e depois hardware nativo). Tratar instabilidade de userland sob emulação como risco de plataforma (não da nossa config) e documentar internamente (ver `docs/UPSTREAM_REPORT_KVM_RUSTC.md`; **sem envio upstream**). Critério da Fase 2 fica "parcial" até lá.
+- **Consequências**: Fase 2 (build self-hosted) dependente de upstream; caminhos de   mitigação: testar (a) TCG puro, (b) hardware nativo via `cookbook` local, (c) tentar mitigação local do kernel via tree próprio (fork não contribuído); usuário escolhe.
 
 ---
 

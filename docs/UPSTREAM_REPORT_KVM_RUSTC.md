@@ -1,14 +1,13 @@
 # Upstream report (draft) — rustc/cargo under QEMU/KVM
 
-Status: **documentado internamente; NÃO aberto upstream**.
+Status: **documentado internamente; NÃO será aberto/submetido**.
 
-Motivo: o CONTRIBUTING do Redox OS
+Motivo: o projeto é **paralelo e privado** — nenhum código, report, issue ou
+MR é enviado ao Redox OS nem a repositórios de código fonte. Além disso, o
+CONTRIBUTING do Redox
 (`https://gitlab.redox-os.org/redox-os/redox`) proíbe conteúdo gerado por
-LLM (inclusive issues), sob pena de ban. Os issues do GitHub estão
-desabilitados (`redox-os/redox`); o tracker oficial é o GitLab próprio.
-Se um humano quiser submeter, usar o rascunho abaixo como referência
-factual, reescrito em texto próprio, em
-<https://gitlab.redox-os.org/redox-os/redox/-/issues>.
+LLM (inclusive issues) e o GitHub desabilitou issues em `redox-os/redox`.
+Este documento serve apenas de registro interno do diagnóstico.
 
 O conteúdo também está resumido em `REDOX_AUDIT.md` §2.15 e §3.1/10.
 

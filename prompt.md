@@ -51,6 +51,8 @@ Objetivo:
 
 > "Transformar um Raspberry Pi em um servidor de IA local."
 
+> E um gadget de apoio para o notebook principal de desenvolvimento de IA.
+
 O dispositivo deve inicializar diretamente nos serviços necessários para executar modelos de IA.
 
 Não deve ser um desktop tradicional.
@@ -446,6 +448,15 @@ git
 debugging
 testing
 
+Navegador:
+
+* obscura.sh (https://obscura.sh/)
+
+IDE:
+
+* opencode (prioridade)
+* vscode (opcional)
+
 Criar CLI:
 
 dev
@@ -544,6 +555,9 @@ Não incluir por padrão:
 * IDE
 * ferramentas desnecessárias
 * serviços não utilizados
+
+> Navegador (`obscura.sh`) e IDE (`opencode`, opcionalmente `vscode`) são
+> ferramentas do **Developer OS**, não do Edge AI OS.
 
 Boot:
 
@@ -1003,7 +1017,7 @@ Regras:
 
 * Rust-first
 * minimal dependencies
-* upstream-friendly
+* upstream-compatible (base Redox intacta; sem envio de código)
 * small commits
 * small PRs
 * tests required

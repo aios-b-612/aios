@@ -7,7 +7,7 @@
 
 ## 1. Princípios Arquiteturais
 
-1. **Upstream-friendly**: o código deve poupar merges com o Redox upstream. Preferimos *adicionar receitas/perfis* a *modificar componentes upstream*.
+1. **Upstream-compatível**: o código preserva compatibilidade com o Redox base (kernel/userspace sem modificações), permitindo aplicar updates do upstream sem re-merges. **Projeto paralelo e privado: não há envio/contribuição de código ao Redox nem a repositórios de código fonte.**
 2. **Rust-first**: todos os novos componentes são Rust.
 3. **Userspace-first**: serviços e daemons antes de kernel.
 4. **CPU-only inicialmente**: sem GPU/NPU até drivers existirem (auditoria: não existem).
@@ -154,12 +154,9 @@ aios/
 
 **Estado atual (Fase 3):** implementado no workspace `aios/` — `ai-core/` (crate aios-core: gguf, checksum, model, cache, registry, error), `edge-sdk/` (crate aios-sdk, stub), `cli/ai/` (bin `ai`), `scripts/build-redox.sh` (cross-build prefix), raiz com `Cargo.toml` (workspace), `.cargo/config.toml` (linker `x86_64-unknown-redox-gcc`). `developer-os/`, `edge-os/`, `deploy/`, `tools/`, `tests/` ainda são alvo de fases posteriores.
 
-**Relação com o relatório upstream (redox-os/redox):**
+**Relação com o Redox base (redox-os/redox):**
 
-- Para a fase de protótipo, mantemos o meta-repo `platform/` separado do upstream. Quando estável, enviaremos:
-  - receitas novas como MRs ao cookbook;
-  - perfis de config como MRs;
-  - patches de crates (apenas os menores possíveis) via `redoxer`/`cookbook` patches locais primeiro.
+- O Redox OS é a **base tecnológica** (kernel, userspace, toolchain prefix) consumida como dependência. O projeto é **paralelo e privado**: nenhum código, receita, perfil, config, pacote ou report (issues/MRs) é enviado ao Redox nem a repositórios de código fonte. Atualizações do upstream são consumidas passivamente quando necessário; qualquer correção local fica no nosso tree.
 
 ---
 
