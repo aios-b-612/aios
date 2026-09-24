@@ -97,6 +97,27 @@
 - **Decisão**: Não prometer "dev/build sel-hosted funcional dentro do OS" até demonstrado em bootstrap limpo (KVM e depois hardware nativo). Tratar instabilidade de userland sob emulação como risco de plataforma (não da nossa config) e documentar internamente (ver `docs/UPSTREAM_REPORT_KVM_RUSTC.md`; **sem envio upstream**). Critério da Fase 2 fica "parcial" até lá.
 - **Consequências**: Fase 2 (build self-hosted) dependente de upstream; caminhos de   mitigação: testar (a) TCG puro, (b) hardware nativo via `cookbook` local, (c) tentar mitigação local do kernel via tree próprio (fork não contribuído); usuário escolhe.
 
+## ADR-014 — Projeto paralelo e privado: nenhum envio ao Redox nem a repositórios de código
+
+- **Status**: Aceito
+- **Contexto**: O Redox OS é a base tecnológica do AIOS (kernel, userspace, toolchain prefix). Direção do mantenedor (2026-09-24): o AIOS é um projeto **paralelo e privado**; não deve ser enviado/submetido ao Redox nem a repositórios de código fonte.
+- **Decisão**: Nenhum código, receita, perfil, config, pacote, report, issue ou MR é enviado ao Redox OS (`redox-os/*`) nem a repositórios de código fonte. O upstream é consumido apenas como dependência passiva; qualquer correção local permanece no nosso tree. Repositórios locais (`aios/`, `platform/`) ficam **sem remote**.
+- **Consequências**: + independência e privacidade; - ficamos fora de correções/benefícios upstream (fixes do kernel/userland dependem de terceiros). Report de estabilidade (rustc/cargo KVM) registrado apenas internamente (`docs/UPSTREAM_REPORT_KVM_RUSTC.md`).
+
+## ADR-015 — Ferramentas do Developer OS: navegador obscura.sh; IDE opencode (prioridade)
+
+- **Status**: Aceito
+- **Contexto**: Escolha de navegador e IDE padrão do Developer OS (perfil dev; Edge permanece sem eles). Direção do mantenedor (2026-09-24).
+- **Decisão**: Navegador padrão: **obscura.sh** (`https://obscura.sh/`). IDE padrão: **opencode** (prioridade); **vscode** opcional. Edge AI OS não inclui navegador nem IDE.
+- **Consequências**: + ferramenta definida para o perfil dev; - obscura.sh/vscode exigem portabilidade ao Redox (validar na Fase 3+; fallback: navegador/IDE leve nativo se não portarem).
+
+## ADR-016 — Objetivo estendido: servidor de IA + gadget de apoio ao notebook de dev
+
+- **Status**: Aceito
+- **Contexto**: A visão original era "Transformar um Raspberry Pi em um servidor de IA local". Direção do mantenedor (2026-09-24): o dispositivo também é um **gadget de apoio para o notebook principal de desenvolvimento de IA**.
+- **Decisão**: O dispositivo serve a dois papéis: (1) servidor local de IA (inferência/tarefas offline); (2) gadget de apoio ao notebook de dev (offload de inferência, execução de tarefas, monitoramento). Ambos no mesmo runtime Edge AI OS.
+- **Consequências**: + caso de uso imediato e útil no dia a dia do dev; - escopo do Edge OS inclui interface de integração com o notebook de dev (ex.: API/serve, CLI edge) já prevista nas Fases 4–5.
+
 ---
 
 ## Decisões Rejeitadas (e por quê)
