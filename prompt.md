@@ -468,6 +468,44 @@ Memória de longo prazo para agentes (padrão no sistema):
   agentes, máquinas e reboots no dispositivo. Sem chave de API no caminho padrão
   (captura/consolidação sem LLM) — embeddings/LLM opcionais.
 
+  Uso condicional: adotar ai-memory no dispositivo **somente se for extremamente
+  leve** (binário único Rust, sem daemon/HTTP/SQLite e sem dependências que
+  exijam portabilidade complexa ao Redox). Se o peso não for aceitável, fazer a
+  **nossa própria implementação com base nele** (o formato markdown/git e a
+  separação "quem hospeda o modelo" ficam conosco; ver ADR-018).
+
+Sandbox para agentes de código (padrão):
+
+* ai-jail (repo: https://github.com/akitaonrails/ai-jail ; docs: https://aijail.io/pt-br/)
+
+  Jaula de sistema operacional para agentes de código com IA: inicia o agente
+  dentro de um sandbox do SO (Linux: bubblewrap + Landlock + seccomp + rlimits;
+  macOS: sandbox-exec). Binário único em Rust, sem daemon e sem root. O projeto
+  continua gravável no caminho real; home, chaves (SSH/AWS/navegador), tokens,
+  rede, socket do Docker, tela e clipboard ficam de fora até você liberar
+  (`--allow-host`, `--network`, `--ssh`, `--gpu`, `--docker`...). Reconhece o
+  launcher `ai-memory run` e aplica a política do agente por trás dele; `.ai-jail`
+  em um repo só aperta, nunca abre. Presets: Claude Code, Codex, Gemini CLI,
+  OpenCode, Crush, Grok, Kimi, pi, jcode, SoulForge; `ai-jail bash` abre um shell
+  na jaula. GPL-3.0. No Redox a isolação nativa é `contain` + schemes (ADR-005):
+  validar portabilidade — se não portar, ai-jail fica como ferramenta do
+  host/notebook de dev e o dispositivo usa `contain` com a mesma política mínima.
+
+Cota/uso de IA na interface (padrão):
+
+* ai-usagebar (repo: https://github.com/akitaonrails/ai-usagebar ; docs: https://ailair.akitaonrails.com/pt-br/ai-usagebar/)
+
+  Barra de uso de IA (topo da tela): mostra a cota e o horário de reset de ~24
+  provedores (Claude, Codex, GitHub Copilot, OpenRouter, DeepSeek, Grok, Cursor,
+  Ollama Cloud etc.) onde você já olha — barra superior, TUI (`ai-usagebar-tui`),
+  bandeja do sistema, Waybar/KDE Plasma. Port em Rust do claudebar. `ai-usagebar`
+  detect liga provedores que já têm credencial na máquina (lê arquivos locais e
+  keychains, nunca rede); `usage --json` imprime a cota/reset de todos os
+  provedores num documento só; alertas a 97%/100% e backoff em HTTP 429; várias
+  contas nomeadas. Núcleo único em Rust para todas as interfaces. Necessário ao
+  workflow "qual agente pega a próxima tarefa". No Redox: validar portabilidade
+  (TUI/bare); a fonte de verdade (quota por provedor, reset) independe de LLM.
+
 Criar CLI:
 
 dev

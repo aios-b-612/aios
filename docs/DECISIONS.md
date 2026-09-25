@@ -109,16 +109,34 @@
 
 - **Status**: Aceito
 - **Contexto**: Escolha de navegador, IDE e ferramenta de memória padrão do Developer OS (perfil dev; Edge permanece sem eles). Direção do mantenedor (2026-09-24, incl. adendo ai-memory).
-- **Decisão**: Navegador padrão: **obscura.sh** (`https://obscura.sh/`). IDE padrão: **opencode** (prioridade); **vscode** opcional. Memória de longo prazo para agentes: **ai-memory** (padrão, ver ADR-018). Edge AI OS não inclui navegador nem IDE.
+- **Decisão**: Navegador padrão: **obscura.sh** (`https://obscura.sh/`). IDE padrão: **opencode** (prioridade); **vscode** opcional. Memória de longo prazo para agentes: **ai-memory** (padrão condicional, ver ADR-018). Sandbox de agentes: **ai-jail** (ver ADR-019). Cota/uso de IA na interface: **ai-usagebar** (ver ADR-020). Edge AI OS não inclui navegador nem IDE.
 - **Consequências**: + ferramenta definida para o perfil dev; - obscura.sh/vscode/ai-memory exigem portabilidade ao Redox (validar na Fase 3+; fallback: navegador/IDE leve nativo se não portarem).
 
-## ADR-018 — Memória de longo prazo para agentes: ai-memory como ferramenta padrão
+## ADR-018 — Memória de longo prazo para agentes: ai-memory como ferramenta padrão (uso condicional)
 
-- **Status**: Aceito
-- **Contexto**: Com opencode como IDE padrão (ADR-015) e o dispositivo como gadget do notebook de dev (ADR-016), sessões de agentes precisam de continuidade entre agentes, máquinas e reboots. Direção do mantenedor (2026-09-24): "ferramenta padrão dentro do nosso sistema" = **ai-memory** (`https://aimemorybr.netlify.app/pt-br/`, repo `github.com/akitaonrails/ai-memory`).
-- **Decisão**: `ai-memory` é a ferramenta padrão de memória de longo prazo no AIOS (Developer OS). Binário único em Rust (MIT), sem conta/chave de API no caminho padrão (captura/consolidação sem LLM); integra com opencode e 20+ agentes via hooks/MCP; serve como daemon opcional (multimáquina/time) ou CLI local. Alinha com a visão "o modelo é alugado, a memória é nossa" — wiki em markdown puro, versionada em git, própria do usuário.
-- **Consequências**: + memória persistente e portátil para agentes no dispositivo (cruza agentes, máquinas e reboots); + MIT/open, arquivos markdown auditáveis; - portabilidade a `x86_64-unknown-redox` a validar (Rust puro, mas com SQLite/HTTP e hooks por agente — risco baixo a médio; fallback: rodar no host/LAN apontando para o dispositivo); - é app de usuário, não runtime do Edge AI OS.
-- **Referência**: Fase 3+ (embarcar binário `ai-memory` no Developer OS; `ai-memory run opencode` como fluxo padrão).
+- **Status**: Aceito (uso condicional)
+- **Contexto**: Com opencode como IDE padrão (ADR-015) e o dispositivo como gadget do notebook de dev (ADR-016), sessões de agentes precisam de continuidade entre agentes, máquinas e reboots. Direção do mantenedor (2026-09-24): "ferramenta padrão dentro do nosso sistema" = **ai-memory** (`https://aimemorybr.netlify.app/pt-br/`, repo `github.com/akitaonrails/ai-memory`). Adendo (2026-09-24): adotar **somente se for extremamente leve**; senão, fazer a nossa implementação própria com base nele (o que realmente precisamos inclui algo como o `ai-usagebar`, ver ADR-020).
+- **Decisão**: `ai-memory` é candidata padrão de memória de longo prazo no AIOS (Developer OS): binário único em Rust (MIT), sem conta/chave de API no caminho padrão (captura/consolidação sem LLM), integra com opencode e 20+ agentes, wiki em markdown puro versionada em git ("o modelo é alugado, a memória é nossa"). **Condição**: após validar no target `-unknown-redox`, embarcar o binário **somente se o peso/deps forem extremamente leves** (sem daemon/HTTP/SQLite desnecessários). Se não couber, **construir a nossa própria memória baseada nela** (mesmo formato markdown/git e same visão), mantendo integrações com ai-jail (ADR-019) e ai-usagebar (ADR-020).
+- **Consequências**: + memória persistente e portátil para agentes no dispositivo; + MIT/open, arquivos markdown auditáveis; - portabilidade a `x86_64-unknown-redox` é o critério de corte (SQLite/HTTP/hooks por agente = risco baixo a médio; fallback: rodar no host/LAN apontando para o dispositivo ou nossa própria impl.).
+- **Referência**: Fase 3+ (validar peso no Redox; `ai-memory run opencode` — ou equivalente próprio — como fluxo padrão).
+
+## ADR-019 — Sandbox para agentes de código: ai-jail (padrão quando portável)
+
+- **Status**: Proposto (validar portabilidade ao Redox)
+- **Contexto**: O agente roda com a conta do usuário e lê tudo o que ele lê. Direção do mantenedor (2026-09-24): "também vamos usar esse" = **ai-jail** (`https://aijail.io/pt-br/`, repo `github.com/akitaonrails/ai-jail`).
+- **Decisão**: `ai-jail` é a ferramenta padrão de sandbox para agentes de código: binário único em Rust, sem daemon e sem root, inicia o agente dentro de um sandbox do SO (Linux: bubblewrap + Landlock + seccomp + rlimits; macOS: sandbox-exec). O projeto permanece gravável no caminho real; home, chaves (SSH/AWS/navegador), tokens, rede, docker.sock, tela e clipboard ficam fora até liberar (`--allow-host`/`--network`/`--ssh`/`--gpu`/`--docker` etc.). Reconhece o launcher `ai-memory run` (isa política do agente por trás); um `.ai-jail` em um repo só aperta, nunca abre. Presets incluem opencode; `ai-jail bash` abre shell na jaula. GPL-3.0.
+- **No Redox**: a isolação nativa já decidida é `contain` + schemes (ADR-005). Se ai-jail não portar (bubblewrap/Landlock/seccomp são Linux), ele permanece como ferramenta do host/notebook de dev e o dispositivo usa `contain` com a mesma política mínima.
+- **Consequências**: + projeto isolado de chaves/tokens/rede (sem blowup no host); + política única por agente escrita uma vez; - GPL-3.0; - sandbox de processo compartilha o kernel (não é VM descartável) — para código hostil manter VM descartável; - portabilidade ao Redox improvável (validar; fallback `contain`).
+- **Referência**: Fase 3+ (dev/notebook: `ai-jail opencode`; dispositivo: política equivalente em `contain`).
+
+## ADR-020 — Cota/uso de IA na barra superior: ai-usagebar (padrão quando portável)
+
+- **Status**: Proposto (validar portabilidade ao Redox)
+- **Contexto**: O usuário assina/usa vários provedores de plano de código, cada um mede de um jeito (janela de 5 h, semanal, saldo pré-pago) e abrir N dashboards para escolher "qual agente pega a próxima tarefa" é inviável. Mantenedor (2026-09-24): mesmo com a memória incerta (ADR-018), "precisamos de algo assim" = **ai-usagebar** (`https://ailair.akitaonrails.com/pt-br/ai-usagebar/`, repo `github.com/akitaonrails/ai-usagebar`).
+- **Decisão**: `ai-usagebar` é a ferramenta padrão de cota/uso de IA na interface: mostra a cota e o horário de reset de ~24 provedores (Claude, Codex, GitHub Copilot, OpenRouter, DeepSeek, Grok, Cursor, Ollama Cloud etc.) na barra superior do OS, TUI (`ai-usagebar-tui`), bandeja do sistema ou Waybar/KDE Plasma. Port em Rust do claudebar; núcleo único em Rust alimenta todas as interfaces. `ai-usagebar detect` liga provedores com credencial já na máquina (lê arquivos locais/keychains, nunca rede); `usage --json` imprime a cota/reset de todos os provedores (scriptável); alertas a 97%/100%, backoff em HTTP 429, várias contas nomeadas. Independente de LLM (a fonte da verdade é a quota de cada provedor).
+- **No Redox**: a interface "barra superior" depende do desktop (Redox UI). Validar: o `ai-usagebar-tui` (terminal) e o `usage --json` são portáveis com núcleo Rust; se a barra do OS não comportar, provisionar desenho próprio (Rust) puxando do mesmo `usage --json`, ou rodar no host.
+- **Consequências**: + decisão de "qual agente pega a próxima tarefa" a partir de uma olhada; + scriptável/JSON; - cada provedor usa forma própria de cota (manutenção); - portabilidade da barra ao Redox a validar.
+- **Referência**: Fase 3+ (embarcar `ai-usagebar`/TUI no Developer OS; `ai-usagebar usage --json` como fonte de verdade para a interface).
 
 ## ADR-016 — Objetivo estendido: servidor de IA + gadget de apoio ao notebook de dev
 
