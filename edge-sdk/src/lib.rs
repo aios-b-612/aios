@@ -1,7 +1,7 @@
 //! AIOS edge SDK: exposes `ai::load` / `model.generate`-style API for edge
-//! applications. Thin facade over aios-core. `load` is functional in Fase 3
-//! (resolves a model from the local registry/cache); `generate` becomes real
-//! with the Fase 4 inference backend.
+//! applications. Thin facade over aios-core + aios-inference. `load` resolves
+//! a model from the local registry/cache (Fase 3); `generate` runs real
+//! inference through the Candle CPU backend (Fase 4).
 
 use std::fs;
 use std::path::Path;
@@ -61,10 +61,48 @@ pub fn load(name: &str) -> aios_core::Result<LoadedModel> {
     )))
 }
 
-/// Generate a completion for `prompt`. (Placeholder: real loading arrives
-/// with the CPU backend in Fase 4.)
-pub fn generate(_loaded: &LoadedModel, prompt: &str) -> aios_core::Result<String> {
-    Ok(format!("[placeholder] echo: {prompt}"))
+/// Result of a real inference run, with timing/throughput metrics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Generation {
+    /// Decoded output text (stops at EOS or `max_tokens`).
+    pub text: String,
+    /// Generated tokens per second (wall time of the generation loop).
+    pub tokens_per_second: f64,
+    /// Model load time (GGUF + weights + tokenizer).
+    pub load_ms: u128,
+}
+
+/// Generate a completion for `prompt` through the Candle CPU backend.
+///
+/// Loads the model file pointed to by [`load`], runs greedy generation and
+/// returns the decoded text. Uses a default budget of 64 generated tokens;
+/// use [`generate_with_metrics`] for full control and metrics.
+pub fn generate(loaded: &LoadedModel, prompt: &str) -> aios_core::Result<String> {
+    generate_with_metrics(loaded, prompt, 64).map(|g| g.text)
+}
+
+/// Like [`generate`] but with an explicit token budget and metrics
+/// (tokens/s, load time).
+pub fn generate_with_metrics(
+    loaded: &LoadedModel,
+    prompt: &str,
+    max_tokens: usize,
+) -> aios_core::Result<Generation> {
+    let mut backend =
+        aios_inference::CandleBackend::new().map_err(|e| Error::Msg(format!("backend: {e}")))?;
+    backend
+        .load_model(&loaded.path)
+        .map_err(|e| Error::Msg(format!("load {}: {e}", loaded.path)))?;
+    let load_ms = aios_inference::load_time(&backend).as_millis();
+    let text = backend
+        .generate(prompt, max_tokens)
+        .map_err(|e| Error::Msg(format!("generate: {e}")))?;
+    let tokens_per_second = backend.tokens_per_second();
+    Ok(Generation {
+        text,
+        tokens_per_second,
+        load_ms,
+    })
 }
 
 #[cfg(test)]
@@ -138,15 +176,14 @@ mod tests {
     }
 
     #[test]
-    fn generate_placeholder() {
+    fn generate_missing_model_fails() {
         let m = LoadedModel {
             name: "x".into(),
-            path: "/dev/null".into(),
+            path: "/nonexistent/does-not-exist.gguf".into(),
             size_bytes: 0,
             sha256: String::new(),
             registered: false,
         };
-        let out = generate(&m, "hi").unwrap();
-        assert!(out.contains("hi"));
+        assert!(generate(&m, "hi").is_err());
     }
 }

@@ -65,7 +65,7 @@
 - [x] CLI `ai` (list/info/install/remove/run/serve/stop/benchmark/inspect).
 - [x] GGUF metadata parser (Rust puro) + `ai inspect model.gguf`.
 - [x] Backend CPU via Candle (validado no target `-unknown-redox` e in-guest — ADR-003).
-- [x] `ai-sdk` básico (`ai::load` funcional; `model.generate` placeholder até Fase 4).
+- [x] `ai-sdk` básico (`ai::load` funcional; `model.generate` real a partir da Fase 4).
 
 **Status**: workspace criado (`aios/`); `aios-core` (parser header GGUF tipos 0–12, SHA-256 puro, model meta, cache, registry TSV) e `aios-sdk` (`load` resolve modelo via registry + cache) prontos; CLI `ai` completo para a fase com **backend Candle CPU real** (list/inspect/verify/install/remove/info/benchmark/doctor/**run**; `serve`/`stop` recusam com erro explícito "Fase 4"). **Build nativo OK** — 11 testes (aios-core 7 + aios-sdk 4) cobrindo roundtrip install/remove, rejeição de nomes inválidos, load via registry/cache **e headers GGUF >1 MiB (streaming)**. Env overrides `AIOS_MODELS_DIR`/`AIOS_REGISTRY`. **Cross-compilação `x86_64-unknown-redox` release OK**: `ai` é único binário estático **8.39 MB** (full stack candle-core 0.9.2 + candle-transformers 0.9.2 + tokenizers 0.21.4). **Inferência real in-guest (KVM)**: modelo TinyLlama-1.1B-Chat Q4_K_M (668 MB, GGUF v3, 201 tensores) injetado em `/var/lib/ai/models`; `ai run` gerou texto (~24 tokens) a **~1.5–1.7 tokens/s** (load ~24–30 s); `ai benchmark` reportou GGUF parse **5/5 ok** (metadata real com vocab de 32k tokens), SHA-256 ~340 MiB/s e throughput Candle ~1.73 tokens/s. Host: ~6.9 tokens/s, load 0.56 s. Regressão de parser: metadata >1 MiB agora é lida em streaming (antes `truncated GGUF` em modelos reais). Exigiu `chmod 1777` em `/var/lib/ai` e `/var/lib/ai/models` (usuário `user` — ADR-017). Pendência: **rebuild da imagem** para o marker `/etc/ai-platform` refletir o rename de branding (`aios-developer-os`).
 
@@ -82,6 +82,7 @@
 - [x] Roteamento tarefa→modelo via config.
 - [x] Perfil de modelo (SLM ≤3B Q4 otimizado). *TinyLlama-1.1B-Chat Q4_K_M é o perfil de referência (668 MB, GGUF v3).*
 - [x] `ai task <name>` funcional.
+- [x] SDK: `aios_sdk::generate`/`generate_with_metrics` com inferência real via Candle (exemplo `examples/generate.rs`).
 
 **Critério**: executar `ai task summarize`/`ai task classify` offline com um SLM baixado; documentar benchmarks reais. — *validado no host e in-guest (ver status).*
 
