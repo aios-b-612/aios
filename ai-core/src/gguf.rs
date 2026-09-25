@@ -7,6 +7,8 @@
 //!   metadata_kv_count u64
 //!   metadata: repeated (key, value_type u32, value)
 
+use std::io::Read;
+
 use crate::error::{Error, Result};
 
 pub const GGUF_MAGIC: u32 = 0x4655_4747;
@@ -143,25 +145,27 @@ impl GgufHeader {
     }
 }
 
-/// Read the GGUF header from the first bytes of a model file.
-pub fn parse_header(buf: &[u8]) -> Result<GgufHeader> {
-    let mut pos = 0usize;
+/// Read and parse the GGUF header by streaming from `src`. Metadata regions of
+/// real models (tokenizer vocabularies) can exceed any fixed buffer, so this
+/// reads incrementally until the metadata block ends.
+pub fn parse_header<R: Read>(src: &mut R) -> Result<GgufHeader> {
+    let mut pos = 0u64;
 
-    let magic = read_u32(buf, &mut pos)?;
+    let magic = read_u32(src, &mut pos)?;
     if magic != GGUF_MAGIC {
         return Err(Error::Msg(format!(
             "invalid GGUF magic 0x{magic:08x} (expected 0x{GGUF_MAGIC:08x})"
         )));
     }
-    let version = read_u32(buf, &mut pos)?;
-    let tensor_count = read_u64(buf, &mut pos)?;
-    let kv_count = read_u64(buf, &mut pos)?;
+    let version = read_u32(src, &mut pos)?;
+    let tensor_count = read_u64(src, &mut pos)?;
+    let kv_count = read_u64(src, &mut pos)?;
 
     let mut metadata = Vec::with_capacity(kv_count as usize);
     for _ in 0..kv_count {
-        let key = read_string(buf, &mut pos)?;
-        let value_type = ValueType::from(read_u32(buf, &mut pos)?);
-        let value = read_value(buf, &mut pos, value_type)?;
+        let key = read_string(src, &mut pos)?;
+        let value_type = ValueType::from(read_u32(src, &mut pos)?);
+        let value = read_value(src, &mut pos, value_type)?;
         metadata.push(Metadata {
             key,
             value_type,
@@ -176,72 +180,73 @@ pub fn parse_header(buf: &[u8]) -> Result<GgufHeader> {
     })
 }
 
-fn read_u32(buf: &[u8], pos: &mut usize) -> Result<u32> {
-    let s = read(buf, pos, 4)?;
+/// Convenience for callers that already hold the bytes in memory.
+pub fn parse_header_buf(buf: &[u8]) -> Result<GgufHeader> {
+    let mut slice = buf;
+    parse_header(&mut slice)
+}
+
+fn read_bytes<R: Read>(src: &mut R, pos: &mut u64, len: usize) -> Result<Vec<u8>> {
+    let mut v = vec![0u8; len];
+    src.read_exact(&mut v).map_err(|_| {
+        Error::Msg(format!("truncated GGUF (need {len} bytes at offset {pos})"))
+    })?;
+    *pos += len as u64;
+    Ok(v)
+}
+
+fn read_u32<R: Read>(src: &mut R, pos: &mut u64) -> Result<u32> {
+    let s = read_bytes(src, pos, 4)?;
     Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 
-fn read_u64(buf: &[u8], pos: &mut usize) -> Result<u64> {
-    let s = read(buf, pos, 8)?;
+fn read_u64<R: Read>(src: &mut R, pos: &mut u64) -> Result<u64> {
+    let s = read_bytes(src, pos, 8)?;
     Ok(u64::from_le_bytes([
         s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
     ]))
 }
 
-fn read_string(buf: &[u8], pos: &mut usize) -> Result<String> {
-    let len = read_u64(buf, pos)? as usize;
-    let s = read(buf, pos, len)?;
-    String::from_utf8(s.to_vec()).map_err(|e| Error::Msg(format!("invalid utf-8 in GGUF string: {e}")))
+fn read_string<R: Read>(src: &mut R, pos: &mut u64) -> Result<String> {
+    let len = read_u64(src, pos)? as usize;
+    let s = read_bytes(src, pos, len)?;
+    String::from_utf8(s).map_err(|e| Error::Msg(format!("invalid utf-8 in GGUF string: {e}")))
 }
 
-fn read_value(buf: &[u8], pos: &mut usize, vt: ValueType) -> Result<Value> {
+fn read_value<R: Read>(src: &mut R, pos: &mut u64, vt: ValueType) -> Result<Value> {
     Ok(match vt {
-        ValueType::Uint8 => Value::Uint8(read(buf, pos, 1)?[0]),
-        ValueType::Int8 => Value::Int8(read(buf, pos, 1)?[0] as i8),
+        ValueType::Uint8 => Value::Uint8(read_bytes(src, pos, 1)?[0]),
+        ValueType::Int8 => Value::Int8(read_bytes(src, pos, 1)?[0] as i8),
         ValueType::Uint16 => {
-            let s = read(buf, pos, 2)?;
+            let s = read_bytes(src, pos, 2)?;
             Value::Uint16(u16::from_le_bytes([s[0], s[1]]))
         }
         ValueType::Int16 => {
-            let s = read(buf, pos, 2)?;
+            let s = read_bytes(src, pos, 2)?;
             Value::Int16(i16::from_le_bytes([s[0], s[1]]))
         }
-        ValueType::Uint32 => Value::Uint32(read_u32(buf, pos)?),
-        ValueType::Int32 => Value::Int32(read_u32(buf, pos)? as i32),
-        ValueType::Float32 => Value::Float32(f32::from_bits(read_u32(buf, pos)?)),
-        ValueType::Bool => Value::Bool(read(buf, pos, 1)?[0] != 0),
-        ValueType::String => Value::String(read_string(buf, pos)?),
+        ValueType::Uint32 => Value::Uint32(read_u32(src, pos)?),
+        ValueType::Int32 => Value::Int32(read_u32(src, pos)? as i32),
+        ValueType::Float32 => Value::Float32(f32::from_bits(read_u32(src, pos)?)),
+        ValueType::Bool => Value::Bool(read_bytes(src, pos, 1)?[0] != 0),
+        ValueType::String => Value::String(read_string(src, pos)?),
         ValueType::Array => {
-            let elem_type = ValueType::from(read_u32(buf, pos)?);
-            let count = read_u64(buf, pos)?;
+            let elem_type = ValueType::from(read_u32(src, pos)?);
+            let count = read_u64(src, pos)?;
             let mut items = Vec::with_capacity(count as usize);
             for _ in 0..count {
-                items.push(read_value(buf, pos, elem_type)?);
+                items.push(read_value(src, pos, elem_type)?);
             }
             Value::Array(items)
         }
-        ValueType::Uint64 => Value::Uint64(read_u64(buf, pos)?),
-        ValueType::Int64 => Value::Int64(read_u64(buf, pos)? as i64),
-        ValueType::Float64 => Value::Float64(f64::from_bits(read_u64(buf, pos)?)),
+        ValueType::Uint64 => Value::Uint64(read_u64(src, pos)?),
+        ValueType::Int64 => Value::Int64(read_u64(src, pos)? as i64),
+        ValueType::Float64 => Value::Float64(f64::from_bits(read_u64(src, pos)?)),
         ValueType::Unknown(t, ..) => {
             // Unknown type: skip its body conservatively (16 bytes). GGUF is
             // versioned; newer types keep fixed-size scalars.
-            let bytes = read(buf, pos, 16)?.to_vec();
+            let bytes = read_bytes(src, pos, 16)?;
             Value::Unknown(t, bytes)
         }
     })
-}
-
-fn read<'a>(buf: &'a [u8], pos: &mut usize, len: usize) -> Result<&'a [u8]> {
-    let end = pos
-        .checked_add(len)
-        .ok_or_else(|| Error::Msg("GGUF length overflow".to_string()))?;
-    if end > buf.len() {
-        return Err(Error::Msg(format!(
-            "truncated GGUF (need {len} bytes at offset {pos}, file has {})",
-            buf.len()
-        )));
-    }
-    *pos = end;
-    Ok(&buf[*pos - len..*pos])
 }

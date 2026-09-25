@@ -6,12 +6,15 @@
 //! initial version is dependency-free so it cross-compiles cleanly for the
 //! `*-unknown-redox` targets.
 
+pub mod backend;
 pub mod cache;
 pub mod checksum;
 pub mod error;
 pub mod gguf;
 pub mod model;
 pub mod registry;
+
+pub use backend::ComputeBackend;
 
 pub use cache::{
     cache_path_for, default_models_dir, default_name_for, find_models, install_model, is_gguf_file,

@@ -7,8 +7,8 @@
 //!   info       - details about an installed model (registry + file)
 //!   inspect    - print GGUF header of a model file (magic, version, tensors, metadata KV)
 //!   verify     - compute and print the SHA-256 of a model file
-//!   benchmark  - Fase 3 micro-benchmark (GGUF parse + SHA-256 throughput)
-//!   run        - (Fase 4) run inference
+//!   benchmark  - micro-benchmark: GGUF parse, SHA-256, and Candle CPU backend
+//!   run        - run inference with the Candle CPU backend
 //!   serve      - (Fase 4) expose a local HTTP endpoint
 //!   stop       - (Fase 4) stop a running model/server
 //!   doctor     - environment checks (toolchain, cache dir, registry)
@@ -16,6 +16,7 @@
 use aios_core::default_models_dir;
 use aios_core::gguf::ValueType;
 use aios_core::{self, cache_path_for, find_models, install_model, list_installed, pretty_bytes, remove_model, Registry, RegistryEntry};
+use aios_inference::ComputeBackend;
 use std::io::Read;
 use std::path::Path;
 use std::time::Instant;
@@ -31,7 +32,8 @@ Usage:
   ai inspect <file.gguf>
   ai verify <file.gguf>
   ai benchmark <file.gguf> [--iter N]
-  ai run | serve | stop    (requires Fase 4 inference backend)
+  ai run <model>
+  ai serve | stop         (Fase 4)
   ai doctor
 ";
 
@@ -49,7 +51,8 @@ fn main() {
         "inspect" => cmd_inspect(&args[1..]),
         "verify" => cmd_verify(&args[1..]),
         "benchmark" => cmd_benchmark(&args[1..]),
-        "run" | "serve" | "stop" => cmd_fase4(&args[0]),
+        "run" => cmd_run(&args[1..]),
+        "serve" | "stop" => cmd_fase4(&args[0]),
         "doctor" => cmd_doctor(),
         "help" | "-h" | "--help" => {
             eprintln!("{USAGE}");
@@ -363,6 +366,7 @@ fn cmd_benchmark(args: &[String]) -> i32 {
         return 2;
     };
     let mut iter = 200usize;
+    let mut gen_tokens = 32usize;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -373,6 +377,14 @@ fn cmd_benchmark(args: &[String]) -> i32 {
                     return 2;
                 }
                 iter = args[i].parse().unwrap_or(200);
+            }
+            "--gen-tokens" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--gen-tokens requires a number");
+                    return 2;
+                }
+                gen_tokens = args[i].parse().unwrap_or(32);
             }
             other => {
                 eprintln!("unexpected argument: {other}");
@@ -391,8 +403,25 @@ fn cmd_benchmark(args: &[String]) -> i32 {
     };
     let size = file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    // Parse benchmark: header only (the full tensor data does not need parsing).
-    let head: Vec<u8> = {
+    // Parse benchmark: header only (the full tensor data does not need
+    // parsing). We re-open the file each iteration so metadata regions larger
+    // than any buffer are handled (real vocabularies exceed 1 MiB).
+    let n_parse = iter;
+    let t0 = Instant::now();
+    let mut parsed_ok = 0usize;
+    for _ in 0..n_parse {
+        let ok = match std::fs::File::open(path) {
+            Ok(mut f) => aios_core::gguf::parse_header(&mut f).is_ok(),
+            Err(_) => false,
+        };
+        if ok {
+            parsed_ok += 1;
+        }
+    }
+    let parse_secs = t0.elapsed().as_secs_f64();
+
+    // SHA-256 throughput on a fixed sample of the file.
+    let head = {
         let mut file = file;
         const HEAD: usize = 1 << 20;
         let mut buf = vec![0u8; HEAD];
@@ -404,17 +433,6 @@ fn cmd_benchmark(args: &[String]) -> i32 {
             }
         }
     };
-    let n_parse = iter;
-    let t0 = Instant::now();
-    let mut parsed_ok = 0usize;
-    for _ in 0..n_parse {
-        if aios_core::gguf::parse_header(&head).is_ok() {
-            parsed_ok += 1;
-        }
-    }
-    let parse_secs = t0.elapsed().as_secs_f64();
-
-    // SHA-256 throughput on a sample sized to the file.
     let n_hash = iter;
     let t1 = Instant::now();
     for _ in 0..n_hash {
@@ -424,21 +442,139 @@ fn cmd_benchmark(args: &[String]) -> i32 {
     let total_bytes = (head.len() as u64) * (n_hash as u64);
     let mib_per_s = (total_bytes as f64) / (1 << 20) as f64 / hash_secs;
 
-    println!("AIOS ai benchmark (Fase 3: metadata/checksum path)");
+    println!("AIOS ai benchmark (metadata/checksum/Candle backend)");
     println!("  file:               {path}");
     println!("  size:               {} ({} bytes)", pretty_bytes(size), size);
     println!("  iter:               {iter}");
     println!("  GGUF parse:         {parsed_ok}/{n_parse} ok, {:.1} parse/s", n_parse as f64 / parse_secs.max(1e-9));
     println!("  SHA-256:            {:.2} MiB/s (sample {} bytes)", mib_per_s, head.len());
-    println!("note: inference benchmark arrives with the Fase 4 backend.");
+    infer_benchmark(path, gen_tokens);
     0
+}
+
+/// Second half of `ai benchmark`: load the model through the Candle backend
+/// and measure real generation throughput. Non-fatal (reports why it skipped).
+fn infer_benchmark(path: &str, max_tokens: usize) {
+    match aios_inference::CandleBackend::new() {
+        Ok(mut backend) => match backend.load_model(path) {
+            Ok(()) => {
+                let name = aios_inference::model_name(&backend).to_string();
+                let load_ms = aios_inference::load_time(&backend).as_millis();
+                let prompt = "Hello";
+                let out = match backend.generate(prompt, max_tokens) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        println!("  Candle:             load ok but generation failed: {e}");
+                        return;
+                    }
+                };
+                let tps = backend.tokens_per_second();
+                println!("  Candle backend:     {} on {} (load {load_ms} ms)", backend.name(), backend.device());
+                println!("  Candle model:       {name}");
+                println!("  Candle generate:    prompt={prompt:?} -> {out:?}");
+                println!("  Candle throughput:  {tps:.2} tokens/s");
+            }
+            Err(e) => println!("  Candle backend:     skipped ({e})"),
+        },
+        Err(e) => println!("  Candle backend:     unavailable ({e})"),
+    }
+}
+
+/// `ai run <model>` — run inference through the Candle CPU backend.
+fn cmd_run(args: &[String]) -> i32 {
+    let Some(name) = args.first() else {
+        eprintln!("usage: ai run <model|path.gguf> [--prompt TEXT] [--max-tokens N]");
+        return 2;
+    };
+    let mut prompt = "Hello".to_string();
+    let mut max_tokens = 64usize;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--prompt" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--prompt requires a value");
+                    return 2;
+                }
+                prompt = args[i].clone();
+            }
+            "--max-tokens" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--max-tokens requires a number");
+                    return 2;
+                }
+                max_tokens = match args[i].parse() {
+                    Ok(n) => n,
+                    Err(_) => {
+                        eprintln!("--max-tokens expects a number");
+                        return 2;
+                    }
+                };
+            }
+            other => {
+                eprintln!("unexpected argument: {other}");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+
+    // Resolve model path: explicit file, registry, or <cache>/<name>.gguf.
+    let path = if std::path::Path::new(name).is_file() {
+        name.to_string()
+    } else {
+        let reg = match Registry::load(aios_core::default_registry_file()) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error: registry: {e}");
+                return 1;
+            }
+        };
+        if let Some(e) = reg.find(name) {
+            e.path.clone()
+        } else {
+            let guess = cache_path_for(Path::new(&default_models_dir()), name);
+            if guess.is_file() {
+                guess.display().to_string()
+            } else {
+                eprintln!("error: model '{name}' not found as a file, in the registry or in the cache");
+                return 1;
+            }
+        }
+    };
+
+    let mut backend = match aios_inference::CandleBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: backend init: {e}");
+            return 1;
+        }
+    };
+    if let Err(e) = backend.load_model(&path) {
+        eprintln!("error: load {path}: {e}");
+        return 1;
+    }
+    eprintln!("==> {name}  [{}, load {} ms]", backend.device(), aios_inference::load_time(&backend).as_millis());
+    match backend.generate(&prompt, max_tokens) {
+        Ok(text) => {
+            println!("{text}");
+            eprintln!("==> {:.2} tokens/s", backend.tokens_per_second());
+            0
+        }
+        Err(e) => {
+            eprintln!("error: generate: {e}");
+            1
+        }
+    }
 }
 
 fn cmd_fase4(name: &str) -> i32 {
     eprintln!(
-        "error: 'ai {name}' requires the Fase 4 inference backend, which is not \
-         implemented yet (see docs/ROADMAP.md). Available now: list, install, \
-         remove, info, inspect, verify, benchmark, doctor."
+        "error: 'ai {name}' requires the Fase 4 serving stack (HTTP/daemon), which is \
+         not implemented yet (see docs/ROADMAP.md). Available now: list, install, \
+         remove, info, inspect, verify, benchmark, run, doctor."
     );
     1
 }

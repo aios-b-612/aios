@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["ai-core", "edge-sdk", "cli/ai"]
+members = ["ai-core", "ai-inference", "edge-sdk", "cli/ai"]
 
 [workspace.package]
 version = "0.1.0"

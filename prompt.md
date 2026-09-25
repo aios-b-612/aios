@@ -457,6 +457,17 @@ IDE:
 * opencode (prioridade)
 * vscode (opcional)
 
+Memória de longo prazo para agentes (padrão no sistema):
+
+* ai-memory (repo: https://github.com/akitaonrails/ai-memory ; docs: https://aimemorybr.netlify.app/pt-br/)
+
+  Memória de longo prazo para os agentes de código com IA (opencode, entre 20+
+  integrações). Binário único em Rust, MIT, canonical no EDGE SYS_DEV tech vision de
+  memória ("o modelo é alugado, a memória é nossa"). Roda como daemon/CLI no Developer
+  OS; o harness roda o agente via `ai-memory run <agente>` para que sessões cruzem
+  agentes, máquinas e reboots no dispositivo. Sem chave de API no caminho padrão
+  (captura/consolidação sem LLM) — embeddings/LLM opcionais.
+
 Criar CLI:
 
 dev

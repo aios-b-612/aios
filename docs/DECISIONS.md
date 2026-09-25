@@ -21,11 +21,12 @@
 
 ## ADR-003 — Backend de inferência primário: Candle (CPU, Rust)
 
-- **Status**: Proposto (validar na Fase 3 com build real no target `-unknown-redox`)
+- **Status**: Aceito (validado em Fase 3, 2026-09-24)
 - **Contexto**: Rust puro sem libc pesada; PyTorch/TensorFlow inviáveis. llama.cpp requer pthreads/FFI C robusto.
 - **Decisão**: Adotar Candle com backend CPU como primeira opção; manter trait `ComputeBackend` para plugar GPU/NPU/outros depois.
 - **Consequências**: + simplicidade e portabilidade; - performance GPU/NPU adiada.
 - **Backup**: se Candle não compilar no Redox, fallback para `wonnx` (já tem receita wip) ou tokenizer+inferência pura Rust minimal para os primeiros SLM.
+- **Validação (Fase 3)**: full stack `candle-core 0.9.2` + `candle-nn` + `candle-transformers 0.9.2` + `tokenizers 0.21.4` cross-compila para `x86_64-unknown-redox` (binário estático 8.4 MB). `ai run` gera texto real com TinyLlama-1.1B-Chat Q4_K_M (GGUF llama-arch) tanto no host quanto in-guest (KVM). Ink-guest: ~1.7 tokens/s, load ~24-30 s. host: ~6.9 tokens/s, load ~0.56 s.
 
 ## ADR-004 — Alvo inicial: x86_64; ARM via QEMU virt; RPi somente validado
 
@@ -104,12 +105,20 @@
 - **Decisão**: Nenhum código, receita, perfil, config, pacote, report, issue ou MR é enviado ao Redox OS (`redox-os/*`) nem a repositórios de código fonte. O upstream é consumido apenas como dependência passiva; qualquer correção local permanece no nosso tree. Repositórios locais (`aios/`, `platform/`) ficam **sem remote**.
 - **Consequências**: + independência e privacidade; - ficamos fora de correções/benefícios upstream (fixes do kernel/userland dependem de terceiros). Report de estabilidade (rustc/cargo KVM) registrado apenas internamente (`docs/UPSTREAM_REPORT_KVM_RUSTC.md`).
 
-## ADR-015 — Ferramentas do Developer OS: navegador obscura.sh; IDE opencode (prioridade)
+## ADR-015 — Ferramentas do Developer OS: navegador obscura.sh; IDE opencode (prioridade); memória ai-memory (padrão)
 
 - **Status**: Aceito
-- **Contexto**: Escolha de navegador e IDE padrão do Developer OS (perfil dev; Edge permanece sem eles). Direção do mantenedor (2026-09-24).
-- **Decisão**: Navegador padrão: **obscura.sh** (`https://obscura.sh/`). IDE padrão: **opencode** (prioridade); **vscode** opcional. Edge AI OS não inclui navegador nem IDE.
-- **Consequências**: + ferramenta definida para o perfil dev; - obscura.sh/vscode exigem portabilidade ao Redox (validar na Fase 3+; fallback: navegador/IDE leve nativo se não portarem).
+- **Contexto**: Escolha de navegador, IDE e ferramenta de memória padrão do Developer OS (perfil dev; Edge permanece sem eles). Direção do mantenedor (2026-09-24, incl. adendo ai-memory).
+- **Decisão**: Navegador padrão: **obscura.sh** (`https://obscura.sh/`). IDE padrão: **opencode** (prioridade); **vscode** opcional. Memória de longo prazo para agentes: **ai-memory** (padrão, ver ADR-018). Edge AI OS não inclui navegador nem IDE.
+- **Consequências**: + ferramenta definida para o perfil dev; - obscura.sh/vscode/ai-memory exigem portabilidade ao Redox (validar na Fase 3+; fallback: navegador/IDE leve nativo se não portarem).
+
+## ADR-018 — Memória de longo prazo para agentes: ai-memory como ferramenta padrão
+
+- **Status**: Aceito
+- **Contexto**: Com opencode como IDE padrão (ADR-015) e o dispositivo como gadget do notebook de dev (ADR-016), sessões de agentes precisam de continuidade entre agentes, máquinas e reboots. Direção do mantenedor (2026-09-24): "ferramenta padrão dentro do nosso sistema" = **ai-memory** (`https://aimemorybr.netlify.app/pt-br/`, repo `github.com/akitaonrails/ai-memory`).
+- **Decisão**: `ai-memory` é a ferramenta padrão de memória de longo prazo no AIOS (Developer OS). Binário único em Rust (MIT), sem conta/chave de API no caminho padrão (captura/consolidação sem LLM); integra com opencode e 20+ agentes via hooks/MCP; serve como daemon opcional (multimáquina/time) ou CLI local. Alinha com a visão "o modelo é alugado, a memória é nossa" — wiki em markdown puro, versionada em git, própria do usuário.
+- **Consequências**: + memória persistente e portátil para agentes no dispositivo (cruza agentes, máquinas e reboots); + MIT/open, arquivos markdown auditáveis; - portabilidade a `x86_64-unknown-redox` a validar (Rust puro, mas com SQLite/HTTP e hooks por agente — risco baixo a médio; fallback: rodar no host/LAN apontando para o dispositivo); - é app de usuário, não runtime do Edge AI OS.
+- **Referência**: Fase 3+ (embarcar binário `ai-memory` no Developer OS; `ai-memory run opencode` como fluxo padrão).
 
 ## ADR-016 — Objetivo estendido: servidor de IA + gadget de apoio ao notebook de dev
 

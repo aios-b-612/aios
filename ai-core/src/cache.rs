@@ -91,8 +91,12 @@ pub fn install_model(src: &Path, dir: &Path, name: &str) -> Result<RegistryEntry
     if name.contains('/') || name.contains('\\') {
         return Err(format!("install: invalid name {name:?}").into());
     }
-    // Validate GGUF before copying anything.
-    crate::gguf::parse_header(&read_head(src)?)?;
+    // Validate GGUF before copying anything (stream: metadata can exceed
+    // fixed buffers for real vocabularies).
+    {
+        let mut f = fs::File::open(src)?;
+        crate::gguf::parse_header(&mut f)?;
+    }
 
     fs::create_dir_all(dir)?;
     let dest = dir.join(format!("{name}.gguf"));

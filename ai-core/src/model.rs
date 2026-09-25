@@ -46,19 +46,20 @@ impl ModelMeta {
     }
 }
 
-/// Read enough of the file to parse the GGUF header. ggml files used to have
-/// the metadata block at the end; modern GGUF puts it at the start and it is
-/// small. We read the first 1 MiB, which covers virtually all headers.
+/// Read and parse the GGUF header by streaming from the file. The metadata
+/// region of real models (tokenizer vocabularies) can exceed small fixed
+/// buffers, so we stream until the metadata block ends.
 fn read_header_head(path: &Path) -> Result<Option<GgufHeader>> {
     use std::io::Read;
     let mut f = fs::File::open(path)?;
-    let mut buf = Vec::with_capacity(1 << 20);
-    f.by_ref().take(1 << 20).read_to_end(&mut buf)?;
-
-    if buf.get(0..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])) != Some(gguf::GGUF_MAGIC) {
+    let mut magic = [0u8; 4];
+    if f.read_exact(&mut magic).is_err()
+        || u32::from_le_bytes(magic) != gguf::GGUF_MAGIC
+    {
         return Ok(None);
     }
-    gguf::parse_header(&buf).map(Some)
+    let mut stream = magic.as_slice().chain(f);
+    gguf::parse_header(&mut stream).map(Some)
 }
 
 pub fn file_stem(path: &Path) -> Option<String> {
@@ -83,7 +84,47 @@ pub fn pretty_bytes(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::gguf;
     use super::*;
+
+    /// Build a GGUF v3 buffer whose metadata block exceeds 1 MiB (a big
+    /// tokenizer vocabulary). Regression test: headers this large must stream.
+    fn big_gguf(kv_payloads: usize) -> Vec<u8> {
+        let mut v = Vec::new();
+        let mut push = |b: &[u8]| v.extend_from_slice(b);
+        push(&0x4655_4747u32.to_le_bytes()); // magic
+        push(&3u32.to_le_bytes()); // version
+        push(&0u64.to_le_bytes()); // tensor count
+        push(&1u64.to_le_bytes()); // kv count
+        let key = "tokenizer.ggml.tokens";
+        push(&(key.len() as u64).to_le_bytes());
+        push(key.as_bytes());
+        push(&9u32.to_le_bytes()); // array
+        push(&8u32.to_le_bytes()); // array element type: string
+        push(&(kv_payloads as u64).to_le_bytes());
+        for i in 0..kv_payloads {
+            let s = format!("tok{i:06}_abcdefghij"); // 16 bytes each
+            push(&(s.len() as u64).to_le_bytes());
+            push(s.as_bytes());
+        }
+        v
+    }
+
+    #[test]
+    fn streams_metadata_larger_than_fixed_buffer() {
+        let buf = big_gguf(80_000); // ~1.4 MiB of metadata
+        assert!(buf.len() > 1 << 20, "test needs >1 MiB, got {}", buf.len());
+
+        let mut slice = &buf[..];
+        let h = gguf::parse_header(&mut slice).expect("streaming parse of big header");
+        assert_eq!(h.version, 3);
+        assert_eq!(h.metadata.len(), 1);
+        let ml = &h.metadata[0];
+        let gguf::Value::Array(items) = &ml.value else {
+            panic!("expected array");
+        };
+        assert_eq!(items.len(), 80_000);
+    }
 
     #[test]
     fn sizes() {
