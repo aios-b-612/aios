@@ -174,7 +174,8 @@
 - [ ] Imagem RPi (validada na fase 6).
 - [ ] Documentação completa + exemplos liberados.
 - [ ] Benchmarks publicados.
-- [ ] Website/CONTRIBUTING/ROADMAP público.
+- [x] Website público (site/ estático + GitHub Pages).
+- [ ] CONTRIBUTING/ROADMAP público.
 - [ ] CI completo no plataforma (format/lint/unit/integration/build/QEMU boot/system tests/package/release).
 
 **Critério**: `make release` produz artefatos reprodutíveis; CI verde com boot QEMU em todos os PRs.

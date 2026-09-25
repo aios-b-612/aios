@@ -165,6 +165,15 @@
 
 ---
 
+## ADR-018 — Site público estático hospedado no GitHub Pages
+
+- **Contexto**: a direção do mantenedor (2026-09-25) pede um site público para o AIOS (referência visual: obscura.sh) cobrindo desktop OS, Raspberry Pi/aarch64, família tiny SLM e apps próprios. Até então a única superfície web era o painel local em `edge-ai/src/panel.rs`, servido em `127.0.0.1` dentro do guest — inalcançável de fora e sem TLS. Alternativas avaliadas: (a) servir o site pelo próprio daemon `edge-ai` em modo web-only; (b) GitHub Pages com site estático versionado no repositório; (c) GitHub Pages em repositório dedicado da organização.
+- **Decisão**: site estático sem build e sem dependências (HTML/CSS/JS, PT-BR, responsivo) em repositório **dedicado** — `aios-b-612/aios-b-612.github.io` — publicado no GitHub Pages direto de `main`. O site **não** vive neste repositório: o código do SO não carrega artefatos de site, e o repositório de pages é público por definição. O painel do `edge-ai` continua sendo a interface local de runtime/métricas, não a vitrine pública.
+- **Consequências**: + zero infraestrutura própria, publicação versionada no git, HTTPS automático e domínio próprio possível depois; + o repositório do SO fica limpo de artefatos web; - o site é informacional (sem dados de runtime ao vivo; se isso virar requisito, precisa de API pública separada com rate-limit); - o conteúdo do site (ex.: créditos, links de terceiros) passa a ser atualizado em outro repositório, exigindo disciplina de versão. Documento: item "Apps" do site descreve apps em construção; itens de roadmap marcados aqui podem divergir do site até a próxima atualização.
+- **Status**: Aceito (2026-09-25).
+
+---
+
 ## Decisões Rejeitadas (e por quê)
 
 - **Rejeitado**: "Fork próprio do kernel" (ADR-001).
