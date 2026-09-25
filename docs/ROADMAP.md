@@ -96,15 +96,19 @@
 
 **Entregas**:
 - [x] Perfil `ai-edge` (aarch64) construído na Fase 1.
-- [ ] `edge-ai.service` (daemon HTTP local, boot direto).
-- [ ] API JSON simples (health, models, infer, benchmark, logs).
-- [ ] `edge` CLI (status/models/install/remove/run/serve/logs/benchmark/devices/update).
-- [ ] `ai-monitor` (métricas: CPU/RAM/storage/temp/network/models/infer/requests/latency/tokens/s/errors) + histórico simples.
-- [ ] Web control panel leve (HTML+JSON no mesmo daemon).
+- [x] `edge-ai.service` (daemon HTTP local, boot direto) — daemon reorder bind-first validado **in-guest**: `listening on http://127.0.0.1:8989` em <4s (loopback OK) com preload do modelo em thread de fundo.
+- [x] API JSON simples (health, models, infer, benchmark, logs, monitor/panel) — validada no host.
+- [x] `edge` CLI (status/models/install/remove/run/serve/logs/benchmark/devices/update) — validado no host e in-guest (exceto TCP, ver blocker).
+- [x] `ai-monitor` (métricas: CPU/RAM/storage/temp/network/models/infer/requests/latency/tokens/s/errors) + histórico simples.
+- [x] Web control panel leve (HTML+JSON no mesmo daemon).
 
 **Critério**: boot QEMU da imagem edge → API respondendo → `edge status` reporta runtime ativo; monitor mostra métricas; painel web acessível no http://edge-ai.local (resolvida por config/hosts local).
 
-**Atenção (blocker upstream)**: completar a userland aarch64 depende do fix do `nvmed` (REDOX_AUDIT.md §2.12). Enquanto isso, o `ai-edge` pode ser validado em x86_64 (perfil sem GUI) para o desenvolvimento do serviço; o aarch64 permanece como alvo de deploy.
+**Status (2026-09-25)**: rebuild da imagem completada após corrupção da `harddrive.img` (causa: boot/montagem FUSE concorrentes no mesmo disco). Inject do perfil `ai-developer` renovado: bins `edge`/`edge-ai`, modelos (`tinyllama.q4_k_m`, `hello.w4gguf`...); marker `/etc/ai-platform` setado para `aios-developer-os`. **Validação in-guest**: daemon ≥ SMOKE bind-first confirmado (`M1_START`→`M2_BOUND_LOOPBACK`→`M3_TRY_LOOPBACK` com `edge-ai: listening on http://127.0.0.1:8989`).
+
+**Blocker (plataforma Redox, não aios)**: `netstack` (userspace netstack do Redox, iniciado pelo init, PID 40) **aborta no boot** sob este qemu: `UNHANDLED EXCEPTION ... /usr/bin/netstack` → `[ERROR netstack@src/header/stdlib/mod.rs:121] Abort`. Como o Redox atende o scheme `tcp:` **inteiramente via userspace netstack**, qualquer connect TCP in-guest (loopback **e** eth0 10.0.2.15) depende dele — logo `edge status`/`edge models` in-guest travam por causa do netstack, **não** do daemon. O bind-first do daemon (0.0.0.0→127.0.0.1) já está validado; resta validar o round-trip TCP completo quando o netstack parar de abortar (upstream Redox / config qemu). Detalhes: `gotchas/redox-netstack-abort-boot-blocker.md`.
+
+**Atenção (blocker upstream)**: completar a userland aarch64 depende do fix do `nvmed` (REDOX_AUDIT.md §2.12). Enquanto isso, o `ai-edge` é validado em x86_64 (perfil sem GUI); o aarch64 permanece como alvo de deploy.
 
 ---
 

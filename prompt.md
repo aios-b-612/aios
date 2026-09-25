@@ -452,6 +452,14 @@ Navegador:
 
 * obscura.sh (https://obscura.sh/)
 
+Base para criar o nosso próprio navegador:
+
+* Servo (https://servo.org/) + servoshell — candidata base para o nosso navegador
+  embutido no Developer OS. Engine web em Rust (mesma linguagem do sistema) + shell
+  do Servo; usar a engine para renderizar a UI do AIOS (painéis, help, docs) e, no
+  futuro, um navegador próprio. Validar peso/toolchain no target `-unknown-redox`
+  (ver ADR-021); obscura.sh permanece como padrão enquanto Servo não portar.
+
 IDE:
 
 * opencode (prioridade)

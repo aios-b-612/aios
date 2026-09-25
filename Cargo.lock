@@ -55,6 +55,7 @@ name = "aios-sdk"
 version = "0.1.0"
 dependencies = [
  "aios-core",
+ "aios-inference",
 ]
 
 [[package]]
@@ -369,6 +370,16 @@ name = "dyn-stack-macros"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
+
+[[package]]
+name = "edge-ai"
+version = "0.1.0"
+dependencies = [
+ "aios-core",
+ "aios-inference",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "either"

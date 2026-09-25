@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["ai-core", "ai-inference", "edge-sdk", "cli/ai"]
+members = ["ai-core", "ai-inference", "edge-sdk", "edge-ai", "cli/ai"]
+exclude = ["redox-os"]
 
 [workspace.package]
 version = "0.1.0"

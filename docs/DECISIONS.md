@@ -109,7 +109,7 @@
 
 - **Status**: Aceito
 - **Contexto**: Escolha de navegador, IDE e ferramenta de memória padrão do Developer OS (perfil dev; Edge permanece sem eles). Direção do mantenedor (2026-09-24, incl. adendo ai-memory).
-- **Decisão**: Navegador padrão: **obscura.sh** (`https://obscura.sh/`). IDE padrão: **opencode** (prioridade); **vscode** opcional. Memória de longo prazo para agentes: **ai-memory** (padrão condicional, ver ADR-018). Sandbox de agentes: **ai-jail** (ver ADR-019). Cota/uso de IA na interface: **ai-usagebar** (ver ADR-020). Edge AI OS não inclui navegador nem IDE.
+- **Decisão**: Navegador padrão: **obscura.sh** (`https://obscura.sh/`); base própria a avaliar: **Servo + servoshell** (ADR-021). IDE padrão: **opencode** (prioridade); **vscode** opcional. Memória de longo prazo para agentes: **ai-memory** (padrão condicional, ver ADR-018). Sandbox de agentes: **ai-jail** (ver ADR-019). Cota/uso de IA na interface: **ai-usagebar** (ver ADR-020). Edge AI OS não inclui navegador nem IDE.
 - **Consequências**: + ferramenta definida para o perfil dev; - obscura.sh/vscode/ai-memory exigem portabilidade ao Redox (validar na Fase 3+; fallback: navegador/IDE leve nativo se não portarem).
 
 ## ADR-018 — Memória de longo prazo para agentes: ai-memory como ferramenta padrão (uso condicional)
@@ -137,6 +137,14 @@
 - **No Redox**: a interface "barra superior" depende do desktop (Redox UI). Validar: o `ai-usagebar-tui` (terminal) e o `usage --json` são portáveis com núcleo Rust; se a barra do OS não comportar, provisionar desenho próprio (Rust) puxando do mesmo `usage --json`, ou rodar no host.
 - **Consequências**: + decisão de "qual agente pega a próxima tarefa" a partir de uma olhada; + scriptável/JSON; - cada provedor usa forma própria de cota (manutenção); - portabilidade da barra ao Redox a validar.
 - **Referência**: Fase 3+ (embarcar `ai-usagebar`/TUI no Developer OS; `ai-usagebar usage --json` como fonte de verdade para a interface).
+
+## ADR-021 — Base para o nosso próprio navegador: Servo + servoshell (candidata)
+
+- **Status**: Proposto (validar peso/toolchain no target `-unknown-redox`)
+- **Contexto**: Direção do mantenedor (2026-09-24): "talvez criar nosso próprio navegador: Servo + servoshell — base para criar nosso navegador". O Developer OS usa **obscura.sh** como navegador padrão (ADR-015); a questão é ter uma base própria em Rust.
+- **Decisão**: **Servo** (engine web em Rust, `servo.org`) + **servoshell** (shell do Servo) são a candidata base para o navegador embutido do AIOS. Servo é da mesma linguagem do sistema (Rust), o que mantém a coerência da stack; serviria para renderizar a UI do AIOS (painéis, help, docs do/direto no dispositivo) e, no futuro, um navegador de verdade. Enquanto não portar ao Redox, **obscura.sh permanece o padrão** do Developer OS.
+- **Consequências**: + navegador/UI 100% Rust alinhado à stack; + controle total do motor (superfície de ataque reduzida, offline-first); - build do Servo é pesado (toolchain/deps gigantes, risco alto de não portar ao `-unknown-redox`; validar cedo); - servoshell é mínimo (shell, não browser completo) — investimento extra para virar navegador; - ADR-015 (obscura.sh) continua valendo até portar.
+- **Referência**: Fase 3+ (cross-build probe do Servo/servoshell para `x86_64-unknown-redox`; decisão final de embarcar).
 
 ## ADR-016 — Objetivo estendido: servidor de IA + gadget de apoio ao notebook de dev
 

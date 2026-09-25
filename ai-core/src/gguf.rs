@@ -119,6 +119,17 @@ impl GgufHeader {
         self.metadata.iter().find(|m| m.key == key)
     }
 
+    /// Read a string metadata value by key (e.g. `general.architecture`).
+    pub fn string(&self, key: &str) -> Option<String> {
+        match self.get(key) {
+            Some(Metadata {
+                value: Value::String(s),
+                ..
+            }) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
     /// Convenience getters used by the model registry.
     pub fn general_name(&self) -> Option<String> {
         match self.get("general.name") {
