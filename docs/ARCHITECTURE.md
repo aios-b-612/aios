@@ -22,6 +22,10 @@
 
 ## 2. Visão Macroscópica
 
+![Camadas do sistema: apps e agentes, runtime de IA, userland, base do SO e hardware](diagrams/01-camadas.webp)
+
+<sub>Diagrama 01 — camadas do sistema, do hardware ao token. Versão interativa: https://aios-b-612.github.io/arquitetura.html#camadas</sub>
+
 ```
                      REDOX OS  (upstream, kernel userspace)
                          │
@@ -46,6 +50,32 @@
                         │
                    Edge Deploy
 ```
+
+### 2.1 Componentes do runtime
+
+![Componentes do runtime edge-ai: interfaces, daemon, núcleo e modelos](diagrams/02-componentes-runtime.webp)
+
+<sub>Diagrama 02 — interfaces (`edge`, `ai`, `edge-sdk`, painel) → daemon `edge-ai` (`127.0.0.1:8989`) → `ai-core` e `ai-inference` → modelos GGUF. Rotas: `/api/health`, `/api/models`, `/api/infer`, `/api/benchmark`, `/api/logs`, `/api/metrics`.</sub>
+
+### 2.2 Fluxo de uma requisição
+
+![Fluxo de inferência local, da entrada à resposta com métricas](diagrams/03-fluxo-requisicao.webp)
+
+<sub>Diagrama 03 — `POST /api/infer` → roteamento (Laya, fail-open) → resolução no registry → carga (`load_ms`) → inferência Candle CPU → resposta (`tokens`, `tps`, `load_ms`).</sub>
+
+### 2.3 Integração dos apps próprios
+
+![Contratos do Laya Gateway e do Web SQLite Admin com o runtime edge-ai](diagrams/04-integracao-apps.webp)
+
+<sub>Diagrama 04 — Laya Gateway entra pela frente do endpoint de inferência (formato compatível com OpenAI, fail-open); Web SQLite Admin fala com os bancos locais por `rusqlite`, em processo separado.</sub>
+
+### 2.4 Ciclo de vida de um modelo
+
+![Ciclo de vida de um modelo GGUF, do arquivo local à inferência](diagrams/05-ciclo-vida-modelo.webp)
+
+<sub>Diagrama 05 — `ai install <arquivo.gguf>` → cache em `/var/lib/ai/models` → SHA-256 (`ai verify`) → entrada em `/var/lib/ai/registry.tsv` → carga em memória e inferência. `ai remove <nome>` apaga o arquivo do cache e a entrada do registry.</sub>
+
+> Os diagramas são gerados do CSS do site público (`tools/export-diagrams.py` no repositório de páginas), para que documento e site nunca divirjam. Fonte: https://aios-b-612.github.io/arquitetura.html
 
 ---
 
