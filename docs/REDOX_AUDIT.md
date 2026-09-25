@@ -174,7 +174,7 @@ Regras importantes:
 | Item | Estado |
 |---|---|
 | Suporte kernel aarch64 | Sim, boot via UEFI (kernel `aarch64-unknown-redox`) |
-| QEMU aarch64 (virt) | Boot UEFI → bootloader → kernel OK; **userland bloqueado no master**: daemon initfs `nvmed` estoura a stack (guard page) ⇒ RedoxFS `/usr` não monta ⇒ sem login. Validado em 2026-09-24 (kernel@e2bf6961e, QEMU 8.2.2 TCG). Upstream não faz CI de boot aarch64 (só `repo-tree`) |
+| QEMU aarch64 (virt) | Boot UEFI → bootloader → kernel OK; **userland bloqueado no master (corrigido em 2026‑09‑25)**: causa raiz era falta de fences de ordering DMA + IRQ não entregue em aarch64; resolvido com fences `Acquire/Release` em `queues.rs` + modo polling no executor (`set_poll_mode(true)`). Agora o init do nvmed completa, ambos os discos NVMe são reconhecidos e a userland avança para o prompt de login. Upstream não tem CI de boot aarch64 (só `repo-tree`). |
 | Raspberry Pi 3 Model B+ | **Reportado como "Booting"** na HARDWARE.md (0.8.0, server, ARM64, console UART pl011) |
 | Raspberry Pi 4 | **NÃO listado** — nenhum suporte validado |
 | Raspberry Pi 5 | **NÃO listado** — nenhum suporte validado |

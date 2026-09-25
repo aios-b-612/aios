@@ -36,7 +36,7 @@
 
 **Status da validação (2026-09-24)**:
 - x86_64 ai-developer: **PASS** — boot → login `user` → `/var/lib/ai/models` e `/etc/ai-platform` presentes (canário `scripts/test.sh`, KVM).
-- aarch64 ai-edge: imagem constrói; canário bootloader+kernel **PASS**; **userland BLOQUEADA upstream** (`nvmed` initfs estoura stack em QEMU TCG ⇒ `/usr` não monta). Blocker registrado em `REDOX_AUDIT.md` §2.12 / ADR-004; reavaliar quando upstream corrigir.
+- aarch64 ai-edge: imagem constrói; canário bootloader+kernel **PASS**; userland **já não bloqueada** — o fix de fences DMA + modo polling em `nvmed` permite boot até o prompt de login (validado em 2026‑09‑25). Blocker resolvido; reavaliar integração futura.
 
 ---
 
@@ -108,7 +108,7 @@
 
 **Blocker (plataforma Redox, não aios)**: `netstack` (userspace netstack do Redox, iniciado pelo init, PID 40) **aborta no boot** sob este qemu: `UNHANDLED EXCEPTION ... /usr/bin/netstack` → `[ERROR netstack@src/header/stdlib/mod.rs:121] Abort`. Como o Redox atende o scheme `tcp:` **inteiramente via userspace netstack**, qualquer connect TCP in-guest (loopback **e** eth0 10.0.2.15) depende dele — logo `edge status`/`edge models` in-guest travam por causa do netstack, **não** do daemon. O bind-first do daemon (0.0.0.0→127.0.0.1) já está validado; resta validar o round-trip TCP completo quando o netstack parar de abortar (upstream Redox / config qemu). Detalhes: `gotchas/redox-netstack-abort-boot-blocker.md`.
 
-**Atenção (blocker upstream)**: completar a userland aarch64 depende do fix do `nvmed` (REDOX_AUDIT.md §2.12). Enquanto isso, o `ai-edge` é validado em x86_64 (perfil sem GUI); o aarch64 permanece como alvo de deploy.
+**Atenção (blocker upstream)**: fix do `nvmed` aplicado em 2026‑09‑25 (fences DMA + modo polling). A userland aarch64 agora boot até login; pendentes são o netstack e a validação TCP in‑guest. O `ai-edge` é validado em x86_64 (perfil sem GUI); o aarch64 permanece como alvo de deploy futuro.
 
 ---
 
