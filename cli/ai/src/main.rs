@@ -9,9 +9,12 @@
 //!   verify     - compute and print the SHA-256 of a model file
 //!   benchmark  - micro-benchmark: GGUF parse, SHA-256, and Candle CPU backend
 //!   run        - run inference with the Candle CPU backend
+//!   task       - run a named AITask (summarize/classify/...) via routing config
 //!   serve      - (Fase 4) expose a local HTTP endpoint
 //!   stop       - (Fase 4) stop a running model/server
 //!   doctor     - environment checks (toolchain, cache dir, registry)
+
+mod tasks;
 
 use aios_core::default_models_dir;
 use aios_core::gguf::ValueType;
@@ -33,6 +36,7 @@ Usage:
   ai verify <file.gguf>
   ai benchmark <file.gguf> [--iter N]
   ai run <model>
+  ai task <name> [--list | --model M | --text T | --file F] [--max-tokens N] [--json]
   ai serve | stop         (Fase 4)
   ai doctor
 ";
@@ -52,6 +56,7 @@ fn main() {
         "verify" => cmd_verify(&args[1..]),
         "benchmark" => cmd_benchmark(&args[1..]),
         "run" => cmd_run(&args[1..]),
+        "task" => cmd_task(&args[1..]),
         "serve" | "stop" => cmd_fase4(&args[0]),
         "doctor" => cmd_doctor(),
         "help" | "-h" | "--help" => {
@@ -521,27 +526,11 @@ fn cmd_run(args: &[String]) -> i32 {
         i += 1;
     }
 
-    // Resolve model path: explicit file, registry, or <cache>/<name>.gguf.
-    let path = if std::path::Path::new(name).is_file() {
-        name.to_string()
-    } else {
-        let reg = match Registry::load(aios_core::default_registry_file()) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("error: registry: {e}");
-                return 1;
-            }
-        };
-        if let Some(e) = reg.find(name) {
-            e.path.clone()
-        } else {
-            let guess = cache_path_for(Path::new(&default_models_dir()), name);
-            if guess.is_file() {
-                guess.display().to_string()
-            } else {
-                eprintln!("error: model '{name}' not found as a file, in the registry or in the cache");
-                return 1;
-            }
+    let path = match resolve_model_path(name) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
         }
     };
 
@@ -574,9 +563,197 @@ fn cmd_fase4(name: &str) -> i32 {
     eprintln!(
         "error: 'ai {name}' requires the Fase 4 serving stack (HTTP/daemon), which is \
          not implemented yet (see docs/ROADMAP.md). Available now: list, install, \
-         remove, info, inspect, verify, benchmark, run, doctor."
+         remove, info, inspect, verify, benchmark, run, task, doctor."
     );
     1
+}
+
+/// Resolve a model reference to a local path: explicit file, registry entry,
+/// or `<cache>/<name>.gguf` fallback.
+fn resolve_model_path(name: &str) -> Result<String, String> {
+    if std::path::Path::new(name).is_file() {
+        return Ok(name.to_string());
+    }
+    let reg = Registry::load(aios_core::default_registry_file()).map_err(|e| format!("registry: {e}"))?;
+    if let Some(e) = reg.find(name) {
+        return Ok(e.path.clone());
+    }
+    let guess = cache_path_for(Path::new(&default_models_dir()), name);
+    if guess.is_file() {
+        return Ok(guess.display().to_string());
+    }
+    Err(format!(
+        "model '{name}' not found as a file, in the registry or in the cache"
+    ))
+}
+
+/// `ai task <name>` — run a named AITask through the Candle CPU backend.
+/// Input precedence: `--text` > `--file` > stdin. `--list` prints all tasks.
+fn cmd_task(args: &[String]) -> i32 {
+    if args.first().map(|s| s.as_str()) == Some("--list")
+        || args.first().map(|s| s.as_str()) == Some("list")
+    {
+        let router = match tasks::TaskRouter::load(&tasks::TaskRouter::default_tasks_file()) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 1;
+            }
+        };
+        println!("Available tasks ({})", router.all().len());
+        for t in router.all() {
+            let model = t.model.as_deref().unwrap_or("<unset>");
+            println!("  {:<12} {:<40} model={model} max_tokens={}", t.name, t.description, t.max_tokens);
+        }
+        return 0;
+    }
+
+    let Some(name) = args.first() else {
+        eprintln!("usage: ai task <name> [--list] [--model M] [--text T | --file F] [--max-tokens N] [--json]");
+        return 2;
+    };
+    let mut model_arg: Option<String> = None;
+    let mut text: Option<String> = None;
+    let mut file: Option<String> = None;
+    let mut max_tokens: Option<usize> = None;
+    let mut json = false;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--model" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--model requires a value");
+                    return 2;
+                }
+                model_arg = Some(args[i].clone());
+            }
+            "--text" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--text requires a value");
+                    return 2;
+                }
+                text = Some(args[i].clone());
+            }
+            "--file" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--file requires a path");
+                    return 2;
+                }
+                file = Some(args[i].clone());
+            }
+            "--max-tokens" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--max-tokens requires a number");
+                    return 2;
+                }
+                match args[i].parse() {
+                    Ok(n) => max_tokens = Some(n),
+                    Err(_) => {
+                        eprintln!("--max-tokens expects a number");
+                        return 2;
+                    }
+                }
+            }
+            "--json" => json = true,
+            other => {
+                eprintln!("unexpected argument: {other}");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+
+    let router = match tasks::TaskRouter::load(&tasks::TaskRouter::default_tasks_file()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let spec = match router.get(name) {
+        Some(s) => s,
+        None => {
+            eprintln!("unknown task '{name}'");
+            eprintln!("run 'ai task --list' to see the available tasks.");
+            return 1;
+        }
+    };
+
+    // Input: --text > --file > stdin.
+    let input = if let Some(t) = text {
+        t
+    } else if let Some(f) = file {
+        match std::fs::read_to_string(&f) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: read {f}: {e}");
+                return 1;
+            }
+        }
+    } else {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            eprintln!("error: no input. Provide --text, --file, or pipe stdin.");
+            return 2;
+        }
+        match std::io::read_to_string(std::io::stdin()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: stdin: {e}");
+                return 1;
+            }
+        }
+    };
+
+    // Model binding: CLI --model > routing config > error.
+    let model = match model_arg.or_else(|| spec.model.clone()) {
+        Some(m) => m,
+        None => {
+            eprintln!("error: task '{name}' has no model bound. Set one in the routing config or pass --model.");
+            return 1;
+        }
+    };
+    let path = match resolve_model_path(&model) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let prompt = spec.render(&input);
+    let limit = max_tokens.unwrap_or(spec.max_tokens);
+
+    let mut backend = match aios_inference::CandleBackend::new() {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("error: backend init: {e}");
+            return 1;
+        }
+    };
+    if let Err(e) = backend.load_model(&path) {
+        eprintln!("error: load {path}: {e}");
+        return 1;
+    }
+    match backend.generate(&prompt, limit) {
+        Ok(output) => {
+            let tps = backend.tokens_per_second();
+            if json {
+                println!("{}", tasks::task_json(name, &model, &input, &output, tps));
+            } else {
+                println!("{output}");
+                eprintln!("==> task={name} model={model} {:.2} tokens/s", tps);
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("error: generate: {e}");
+            1
+        }
+    }
 }
 
 fn cmd_doctor() -> i32 {

@@ -78,12 +78,14 @@
 **Meta**: inferência local viável com modelos pequenos.
 
 **Entregas**:
-- [ ] `AITask` framework (grammar, correction, classification, summarization, embedding, translation, OCR, speech, TTS, vision, code, intent, autocomplete — os viáveis em CPU-first).
-- [ ] Roteamento tarefa→modelo via config.
-- [ ] Perfil de modelo (SLM ≤3B Q4 otimizado).
-- [ ] `ai task <name>` funcional.
+- [x] `AITask` framework (grammar, correction, classification, summarization, embedding, translation, OCR, speech, TTS, vision, code, intent, autocomplete — os viáveis em CPU-first). *Framework pronto com built-ins `summarize`/`classify`/`intent`/`translate`/`qa`; os demais são templates adicionáveis via config.*
+- [x] Roteamento tarefa→modelo via config.
+- [x] Perfil de modelo (SLM ≤3B Q4 otimizado). *TinyLlama-1.1B-Chat Q4_K_M é o perfil de referência (668 MB, GGUF v3).*
+- [x] `ai task <name>` funcional.
 
-**Critério**: executar `ai task summarize`/`ai task classify` offline com um SLM baixado; documentar benchmarks reais.
+**Critério**: executar `ai task summarize`/`ai task classify` offline com um SLM baixado; documentar benchmarks reais. — *validado no host e in-guest (ver status).*
+
+**Status (2026-09-24)**: novo subcomando **`ai task`** com framework `AITask` no CLI (`cli/ai/src/tasks.rs`): 5 tasks built-in (summarize/classify/intent/translate/qa), templates com placeholder `{input}`, roteamento tarefa→modelo por config JSON (`AIOS_TASKS` ou `/etc/ai/tasks.json`) que pode sobrescrever model/prompt/max_tokens de built-ins ou **criar tasks novas**; flags `--list`/`--model`/`--text`/`--file`/`--max-tokens`/`--json` (input: `--text` > `--file` > stdin). Resolução de modelo reutiliza o caminho file→registry→cache (`resolve_model_path`). **Workspace: 14 testes** (aios-cli +3). **Host (TinyLlama real)**: `ai task classify --text "This product is amazing, I love it!"` → *"Positive:..."*; `ai task summarize` gera bullets; `intent` com `--json` devolve JSON válido; ~3 t/s com contexto de task. **In-guest (KVM, smoke PASS)**: `/etc/ai/tasks.json` embarcado ligando summarize/classify→`tinyllama.q4_k_m`; `ai task --list` lista tasks com modelo ligado; `ai task classify` (prompt "amazing"/24 tok) → **0.73 t/s**, `ai task summarize` (24 tok) → **0.72 t/s** (menor que os ~1.5–1.7 de `ai run` porque o prompt de task tem ~30–40 tokens de contexto); task desconhecida rejeitada com erro limpo. Binário cross `ai` agora **8.49 MB** (+serde/serde_json). Pendência conjunta Fase 3/4: rebuild da imagem para o marker de branding `aios-developer-os`.
 
 ---
 
