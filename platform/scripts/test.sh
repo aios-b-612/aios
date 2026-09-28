@@ -172,6 +172,11 @@ trap cleanup EXIT
 # the boot and to drive a session: log in as `user` and verify the Phase 1
 # image content placeholders are present in the guest.
 #
+# -display none is load-bearing, not decoration. -vga only removes the graphics
+# card; without it QEMU still opens a GTK window, and on a runner with no
+# DISPLAY that dies instantly with "gtk initialization failed" and no console
+# output at all. A developer machine with an X server hides the bug.
+#
 # The subshell is a scripted stdin, not evidence: once the guest stops
 # reading -- which is what a failed boot looks like -- printf gets SIGPIPE.
 # That is expected here, so it is ignored rather than printed as a wall of
@@ -194,7 +199,7 @@ set +e
     -machine "${MACHINE}" -cpu "${CPU}" -smp "${SMP}" -m "${MEM}" \
     ${DISK_ARGS} \
     ${NET_ARGS} \
-    -vga none -serial stdio -monitor none -no-reboot > "${OUT}" 2>&1
+    -display none -vga none -serial stdio -monitor none -no-reboot > "${OUT}" 2>&1
 status=${PIPESTATUS[1]}
 set -e
 
