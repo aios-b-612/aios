@@ -53,8 +53,6 @@ if ! have rustup; then
 fi
 
 install_pkgs() {
-  # Deliberately non-fatal: not every distro packages every tool, and cargo
-  # covers the gap below.
   local sudo=""
   if [ "$(id -u)" -ne 0 ]; then
     have sudo || {
@@ -64,19 +62,36 @@ install_pkgs() {
     sudo="sudo"
   fi
   $sudo apt-get update
-  # cbindgen/just are called by their cargo names here; some distros ship them
-  # as cargo-cbindgen/cargo-just, so both spellings are attempted.
-  $sudo apt-get install -y --no-install-recommends \
-    nasm cbindgen just cargo-cbindgen cargo-just || true
+  # One package per invocation on purpose. apt-get aborts the whole
+  # transaction when it cannot locate a single name, so a distro that lacks
+  # one of these would silently get none of them.
+  local pkg
+  for pkg in "$@"; do
+    if have "$pkg"; then
+      continue
+    fi
+    if $sudo apt-get install -y --no-install-recommends "$pkg"; then
+      continue
+    fi
+    echo "info: ${pkg} is not packaged here; a fallback may cover it" >&2
+  done
 }
 
-install_pkgs
+install_pkgs nasm cbindgen just
 
+# cargo install drops binaries somewhere on PATH already, so once it has run
+# the tool is findable; this exists purely so the caller gets a clear message
+# instead of a bare "command not found" from make.
 install_from_cargo() {
   local tool="$1"
   if have "$tool"; then
     return 0
   fi
+  have cargo || {
+    echo "ERROR: ${tool} is missing and cargo is not available to build it" >&2
+    echo "       Install ${tool} with your package manager and rerun." >&2
+    exit 1
+  }
   log "installing ${tool} from crates.io (this compiles from source)"
   cargo install --locked "$tool"
 }
@@ -89,6 +104,13 @@ install_from_cargo just
 for tool in rustup cbindgen nasm just; do
   if have "$tool"; then
     echo "    ok: ${tool} ($(command -v "$tool"))"
+  elif [ "$tool" = "nasm" ]; then
+    # nasm is a C assembler with no crate to fall back on, so a failure here
+    # is not recoverable automatically.
+    echo "ERROR: nasm is a native-build requirement and is not packaged on this" >&2
+    echo "       host. Install it with your package manager (Debian/Ubuntu:" >&2
+    echo "       'apt-get install nasm') and rerun." >&2
+    exit 1
   else
     echo "ERROR: ${tool} is still missing after installing dependencies" >&2
     exit 1
