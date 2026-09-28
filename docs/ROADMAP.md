@@ -4,6 +4,28 @@
 > Princípio: **BOOT → USERSPACE → DEVELOPER → AI → EDGE → RASPBERRY.**
 > Hardware só é listado quando **validado** (boot real em QEMU ou hardware).
 
+## Validação no CI (2026-09-28)
+
+PR #1 (`feature/complete-phases`) fecha com os três jobs verdes no GitHub
+Actions, o que valida a cadeia de release de ponta a ponta, e não só o
+código Rust:
+
+| Job | Resultado | O que prova |
+| --- | --- | --- |
+| `Build & Test` | PASS (56s) | fmt, clippy, build, 123 testes, smoke dos 5 CLIs |
+| `QEMU Boot Test (x86_64)` | **PASS** (10m50s) | imagem construída a partir do upstream pinado, boota até `login:`, `models` e `aios-developer-os` |
+| `QEMU Boot Test (aarch64)` | **BLOCKED** (14m45s) | bootloader, `Currently in EL1` e `kernel_entry` atingidos; userland bloqueado pelo hang de NVMe do upstream |
+
+O job aarch64 é neutro por desenho (exit 2 = BLOCKED, com notice), não um
+verde disfarçado: o console mostra `[BLOCKED] login:` explicitamente.
+
+**Nota de confiança**: até esta validação, `test.sh` rodava apenas no host de
+desenvolvimento, onde `DISPLAY` está definido. No CI, QEMU morria com
+`gtk initialization failed` antes de imprimir uma linha. O canário agora roda
+no runner sem display, que é a configuração que de fato importa.
+
+---
+
 ---
 
 ## FASE 0 — AUDITORIA ✅ (em andamento)
