@@ -92,8 +92,12 @@ jobs:
       - name: Fetch the pinned upstream
         run: ./platform/scripts/bootstrap.sh
 
+      # -n forces the native build. The podman path is auto-detected on these
+      # runners (podman is preinstalled) but is unvalidated for our profiles:
+      # they include upstream's config/server.toml by a relative path that
+      # escapes the container's mount. See docs/gotchas/podman-build-unvalidated.md.
       - name: Build x86_64 ai-developer image
-        run: ./platform/scripts/build.sh -a x86_64 -c ai-developer
+        run: ./platform/scripts/build.sh -a x86_64 -c ai-developer -n
 
       - name: Run x86_64 boot test
         run: ./platform/scripts/test.sh -a x86_64 -c ai-developer -t 300
@@ -143,7 +147,7 @@ jobs:
         run: ./platform/scripts/bootstrap.sh
 
       - name: Build aarch64 ai-edge image
-        run: ./platform/scripts/build.sh -a aarch64 -c ai-edge
+        run: ./platform/scripts/build.sh -a aarch64 -c ai-edge -n
 
       # test.sh exits 2 (BLOCKED) when the kernel boots but userspace never
       # starts — the upstream Redox NVMe hang, which this job cannot fix. That

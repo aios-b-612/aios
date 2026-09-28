@@ -81,6 +81,16 @@ fi
 if [ -z "${PODMAN_BUILD:-}" ]; then
     if command -v podman >/dev/null 2>&1; then
         PODMAN_BUILD=1
+        # The profiles in config/ include upstream's config/server.toml by a
+        # path relative to the config's own directory. In podman mode the
+        # build runs inside a container that mounts only the upstream tree, so
+        # that include escapes the mount and the build fails. The native path
+        # reads the config straight off the host and is the only mode these
+        # images have actually been built in.
+        # See docs/gotchas/podman-build-unvalidated.md.
+        echo "WARNING: podman detected, so this will use the podman build path," >&2
+        echo "         which is UNVALIDATED for the AIOS profiles. If the build" >&2
+        echo "         fails on a missing config/server.toml, rerun with -n." >&2
     else
         echo "info: podman not found; falling back to native build (PODMAN_BUILD=0)" >&2
         PODMAN_BUILD=0
