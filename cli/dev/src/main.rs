@@ -289,8 +289,16 @@ fn cmd_check(args: &[String]) -> i32 {
 
     // Only run cargo when the manifest is sound; a broken manifest usually
     // means the crate itself is not what the author thinks it is.
-    if ok && cmd_cargo(&[], CargoAction::Check) != 0 {
-        ok = false;
+    //
+    // Forward the directory. Without this, `dev check --project ../other` would
+    // validate `../other/project.toml` and then run `cargo check` against the
+    // *current* directory — a green "check: OK" for the wrong crate.
+    if ok {
+        let dir_arg = dir.display().to_string();
+        let cargo_args = ["--project".to_string(), dir_arg];
+        if cmd_cargo(&cargo_args, CargoAction::Check) != 0 {
+            ok = false;
+        }
     }
 
     if ok {
