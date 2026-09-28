@@ -7,5 +7,5 @@
 
 pub mod candle_backend;
 
-pub use candle_backend::{load_time, model_name, model_path, CandleBackend};
 pub use aios_core::ComputeBackend;
+pub use candle_backend::{load_time, model_name, model_path, CandleBackend};

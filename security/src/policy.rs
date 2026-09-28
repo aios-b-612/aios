@@ -69,15 +69,15 @@ impl PolicyRule {
         }
 
         // Check access level matches
-        let access_match = match (self.access, access) {
-            (AccessLevel::ReadWrite, AccessLevel::Read) => true,
-            (AccessLevel::ReadWrite, AccessLevel::Write) => true,
-            (AccessLevel::ReadWrite, AccessLevel::ReadWrite) => true,
-            (AccessLevel::Read, AccessLevel::Read) => true,
-            (AccessLevel::Write, AccessLevel::Write) => true,
-            (AccessLevel::Execute, AccessLevel::Execute) => true,
-            _ => false,
-        };
+        let access_match = matches!(
+            (self.access, access),
+            (AccessLevel::ReadWrite, AccessLevel::Read)
+                | (AccessLevel::ReadWrite, AccessLevel::Write)
+                | (AccessLevel::ReadWrite, AccessLevel::ReadWrite)
+                | (AccessLevel::Read, AccessLevel::Read)
+                | (AccessLevel::Write, AccessLevel::Write)
+                | (AccessLevel::Execute, AccessLevel::Execute)
+        );
         if !access_match {
             return false;
         }

@@ -640,6 +640,7 @@ name = "edge-ai"
 version = "0.1.0"
 dependencies = [
  "aios-core",
+ "aios-deploy",
  "aios-inference",
  "serde",
  "serde_json",

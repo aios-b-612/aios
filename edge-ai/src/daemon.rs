@@ -17,7 +17,10 @@ pub fn run(
     history_every_secs: u64,
 ) -> std::io::Result<()> {
     let runtime = Arc::new(Runtime::new());
-    runtime.log("info", format!("edge-ai v{VERSION} starting on {host}:{port}"));
+    runtime.log(
+        "info",
+        format!("edge-ai v{VERSION} starting on {host}:{port}"),
+    );
 
     let sampler_runtime = runtime.clone();
     std::thread::spawn(move || {

@@ -78,8 +78,8 @@ impl ComputeBackend for CandleBackend {
 
         let start = Instant::now();
         let mut file = std::fs::File::open(path)?;
-        let content = gguf_file::Content::read(&mut file)
-            .map_err(|e| Error::Msg(format!("gguf: {e}")))?;
+        let content =
+            gguf_file::Content::read(&mut file).map_err(|e| Error::Msg(format!("gguf: {e}")))?;
         let llama = qllama::ModelWeights::from_gguf(content, &mut file, &self.device)
             .map_err(|e| Error::Msg(format!("llama: {e}")))?;
         self.load_time = start.elapsed();
@@ -101,8 +101,14 @@ impl ComputeBackend for CandleBackend {
     }
 
     fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<String> {
-        let llama = self.llama.as_mut().ok_or_else(|| Error::Msg("no model loaded".into()))?;
-        let tokenizer = self.tokenizer.as_ref().ok_or_else(|| Error::Msg("no tokenizer loaded".into()))?;
+        let llama = self
+            .llama
+            .as_mut()
+            .ok_or_else(|| Error::Msg("no model loaded".into()))?;
+        let tokenizer = self
+            .tokenizer
+            .as_ref()
+            .ok_or_else(|| Error::Msg("no tokenizer loaded".into()))?;
 
         let prompt_ids = tokenizer
             .encode(prompt, true)

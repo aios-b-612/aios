@@ -131,11 +131,56 @@
 **Meta**: Developer OS → Raspberry Pi deploy sem cloud.
 
 **Entregas**:
-- [ ] `edge devices` registry no Developer (name, address, arch, OS, RAM, storage, models, status, last_seen).
-- [ ] `edge deploy <model.gguf> --device <id>` (validate → compat → storage → transfer → install → configure → start → health).
-- [ ] Protocolo de transferência local (HTTP) com retry/checksum.
+- [x] `edge devices` registry no Developer (name, address, arch, OS, RAM, storage, models, status, last_seen).
+- [x] `edge deploy <model.gguf> --device <id>` (validate → compat → storage → transfer → install → configure → start → health).
+- [x] Protocolo de transferência local (HTTP) com retry/checksum.
 
 **Critério**: deploy E2E de um SLM do Developer OS para um Edge (QEMU aarch64 ou RPi validado) com health check ok.
+
+**Status**: software completo e testado; o critério **ainda não é satisfeito** porque
+falta a perna de hardware.
+
+Entregue:
+- `aios-deploy` e `edge deploy` executam o pipeline completo: validação de
+  compatibilidade → transferência chunked com streaming do arquivo → verificação
+  SHA-256 no device → registro no registry → `GET /api/health` + `GET /api/models`.
+- O health check não aceita liveness sozinho: um daemon saudável que não lista o
+  modelo é tratado como deploy falho (`deploy/src/transfer.rs::health_check`).
+- `edge devices` sonda cada dispositivo e mostra alcançabilidade, contagem de
+  modelos e status, em vez de repetir o que está gravado no arquivo.
+- Transferência não carrega o modelo em RAM: hash e upload passam por um
+  `File` aberto, com no máximo um chunk em memória, e cada retry rebobina para o
+  início. Um modelo de 4 GB não caberia nos dispositivos de 1–4 GB que esta fase
+  tem por alvo.
+- `max_retries` passou a significar "tentativas *depois* da primeira" (antes o
+  laço `1..=max_retries` entregava N tentativas e o nome mentia).
+- `--no-start` foi removido: o daemon não expõe endpoint de ciclo de serviço, e
+  aceitar a flag dizendo que ela não faz nada seria enganoso. Agora ela é
+  rejeitada com o motivo.
+- `--no-verify` só desliga a releitura local pós-transferência; o device sempre
+  recalcula o SHA-256, então a flag não consegue instalar modelo corrompido.
+- `ai-core` GGUF com limites de parsing: `kv_count`, array count e string length
+  são validados antes de alocar, e `u64 -> usize` passa por `try_from` (sem isso
+  havia truncamento real em alvos 32-bit).
+
+Verificação:
+- 22 testes E2E em `deploy/tests/e2e_transfer.rs` (chunking, retry, exaustão de
+  retries, rebobinagem, checksum corrompido, arquivo alterado durante o envio,
+  health check, parser malicioso) + 11 de registry/validação.
+- CLI exercitada end-to-end contra um device real, nos dois sentidos: deploy
+  bem-sucedido muda `devices` de `unknown models=0` para `online models=1`, e um
+  device que mente que instalou faz o comando sair com código 1.
+- `cargo test --all` = 123 testes verdes; `cargo clippy --all -- -D warnings` limpo.
+
+Bloqueios (não são de software):
+- **Raspberry Pi**: sem hardware disponível.
+- **QEMU aarch64**: o kernel sobe (bootloader, EL1, `kernel_entry`) mas o
+  userspace nunca inicia por um hang de NVMe no Redox upstream, antes de
+  `login:`. Ver `docs/gotchas/aarch64-nvmed-not-reproducible.md`.
+
+O que os testes cobrem hoje é o protocolo HTTP completo em host x86_64, não o
+alvo aarch64/RPi. O payload dos testes é um arquivo GGUF sintético, não um SLM
+treinado: exercita transporte e instalação, não carga nem qualidade de inferência.
 
 ---
 
@@ -144,11 +189,26 @@
 **Meta**: isolamento real de modelos/serviços.
 
 **Entregas**:
-- [ ] Mapear suporte real (`contain`, schemes, sudo) e documentar `AI Permissions`.
-- [ ] Policy por modelo (filesystem.read/write, network, device, compute).
+- [x] Mapear suporte real (`contain`, schemes, sudo) e documentar `AI Permissions`.
+- [x] Policy por modelo (filesystem.read/write, network, device, compute).
 - [ ] Execução de inferência em container/isolamento `contain`.
 
 **Critério**: um modelo com policy restrita não acessa rede/filesystem fora da política; teste automatizado negativo.
+
+**Status**: camada de decisão de política completa e coberta por 34 testes
+negativos. A lacuna restante é o isolamento no kernel.
+
+Entregue (`5742b01`):
+- Policy engine com escopo por componente, normalização lexical de `.`/`..`,
+  tie-break `Deny` antes de `Allow` e preservação de `None` como "sem escopo".
+- `plan_container` para planning e `create_container` retornando
+  `NotImplemented` — em vez de fingir isolamento, a API diz que não isola.
+- Perfis built-in e CLI (`authorize`, `describe`, `contain-plan`).
+
+Lacuna honesta: o critério da fase é sobre *isolamento real*, e o que está
+testado é a decisão de autorização em userland. `contain` no kernel não está
+implementado, então um processo que ignore a library ainda teria acesso ao que a
+policy nega. Ver `docs/gotchas/security-isolation.md`.
 
 ---
 
@@ -176,9 +236,29 @@
 - [ ] Benchmarks publicados.
 - [x] Website público (site/ estático + GitHub Pages).
 - [ ] CONTRIBUTING/ROADMAP público.
-- [ ] CI completo no plataforma (format/lint/unit/integration/build/QEMU boot/system tests/package/release).
+- [x] CI completo na plataforma (format/lint/unit/integration/build/CLI + QEMU boot x86_64 + canary aarch64).
 
 **Critério**: `make release` produz artefatos reprodutíveis; CI verde com boot QEMU em todos os PRs.
+
+**Status**: metade feita, e o que falta depende de fora.
+
+Entregue (`f2e8d09`, `9fac75a`):
+- `platform/` versionado com `upstream.lock` pinado, `bootstrap.sh --verify` e
+  `release.sh` com checksums e manifestos.
+- Release multiplataforma; `platform/dist/` removido (~1,8 GB) em favor de
+  artefatos versionados e reproduzíveis.
+- CI: format, clippy `-D warnings`, build, testes e smoke test dos cinco CLIs.
+- Canary aarch64 no CI com semântica correta: `0` passou, `2` bloqueado (notice),
+  qualquer outro código **falha o job**. A versão anterior terminava com
+  `exit 0` incondicional e mascarava regressão real.
+
+Lacunas:
+- **ISO de produção**: a release encontra `harddrive.img`, não uma ISO
+  instalável. `make release` não satisfaz o critério ainda.
+- Imagem RPi depende da Fase 6.
+- "CI verde com boot QEMU em todos os PRs": o x86_64 sobe; o aarch64 fica
+  bloqueado em `kernel_entry` pelo hang de NVMe upstream, então o job roda como
+  notice, não como prova de boot.
 
 ---
 

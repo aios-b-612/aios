@@ -13,6 +13,25 @@ use crate::error::{Error, Result};
 
 pub const GGUF_MAGIC: u32 = 0x4655_4747;
 
+/// Upper bound on the metadata key/value count, and on any single string or
+/// byte-array length, declared by a GGUF file.
+///
+/// These counts are attacker-controlled: they come straight out of the file,
+/// and the parser turns them into allocations. Without a bound, a four-byte
+/// `kv_count` of `u64::MAX` makes `Vec::with_capacity` panic with "capacity
+/// overflow", and a plausible-looking length makes the parser try to allocate
+/// gigabytes before `read_exact` discovers the file is truncated. Both are
+/// panics or OOM on a bad file rather than a parse error, and this parser
+/// runs on files that arrive over the network during `aios-deploy`, so a
+/// corrupt or hostile model must produce an `Err`, never a crash.
+///
+/// The limits are far above any real model: metadata entries are per-key (a
+/// 32k-vocab tokenizer is a handful of array-valued entries, not 32k of
+/// them), and the largest single real metadata string is a tokenizer vocab
+/// list well under a megabyte.
+pub const MAX_METADATA_ENTRIES: u64 = 1_000_000;
+pub const MAX_STRING_LEN: u64 = 256 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum ValueType {
@@ -172,6 +191,14 @@ pub fn parse_header<R: Read>(src: &mut R) -> Result<GgufHeader> {
     let tensor_count = read_u64(src, &mut pos)?;
     let kv_count = read_u64(src, &mut pos)?;
 
+    // Bound the pre-allocation. Without this, `with_capacity` panics with
+    // "capacity overflow" on a crafted kv_count, aborting the whole process
+    // instead of reporting a bad file. See MAX_METADATA_ENTRIES.
+    if kv_count > MAX_METADATA_ENTRIES {
+        return Err(Error::Msg(format!(
+            "GGUF declares {kv_count} metadata entries, over the {MAX_METADATA_ENTRIES} limit"
+        )));
+    }
     let mut metadata = Vec::with_capacity(kv_count as usize);
     for _ in 0..kv_count {
         let key = read_string(src, &mut pos)?;
@@ -197,11 +224,33 @@ pub fn parse_header_buf(buf: &[u8]) -> Result<GgufHeader> {
     parse_header(&mut slice)
 }
 
-fn read_bytes<R: Read>(src: &mut R, pos: &mut u64, len: usize) -> Result<Vec<u8>> {
-    let mut v = vec![0u8; len];
-    src.read_exact(&mut v).map_err(|_| {
-        Error::Msg(format!("truncated GGUF (need {len} bytes at offset {pos})"))
+/// Read `len` bytes, refusing sizes we will not honour.
+///
+/// `len` originates in the file and is therefore attacker-controlled, so both
+/// checks matter and neither is optional:
+///   * `MAX_STRING_LEN` rejects absurd lengths that would otherwise turn into an
+///     OOM or a "capacity overflow" panic instead of a parse error.
+///   * `usize::try_from` rejects lengths that do not fit a `usize`. Skipping it
+///     is a real truncation bug on 32-bit targets: a `u64` length above
+///     `usize::MAX` narrows to a small value, so we would allocate a small
+///     buffer and then read the wrong number of bytes, silently mis-parsing
+///     every following field.
+fn read_bytes<R: Read>(src: &mut R, pos: &mut u64, len: u64) -> Result<Vec<u8>> {
+    if len > MAX_STRING_LEN {
+        return Err(Error::Msg(format!(
+            "GGUF declares a {len}-byte field at offset {pos}, over the {} byte limit",
+            MAX_STRING_LEN
+        )));
+    }
+    let len = usize::try_from(len).map_err(|_| {
+        Error::Msg(format!(
+            "GGUF declares a {len}-byte field at offset {pos}, which does not fit this target's \
+             address space"
+        ))
     })?;
+    let mut v = vec![0u8; len];
+    src.read_exact(&mut v)
+        .map_err(|_| Error::Msg(format!("truncated GGUF (need {len} bytes at offset {pos})")))?;
     *pos += len as u64;
     Ok(v)
 }
@@ -219,7 +268,9 @@ fn read_u64<R: Read>(src: &mut R, pos: &mut u64) -> Result<u64> {
 }
 
 fn read_string<R: Read>(src: &mut R, pos: &mut u64) -> Result<String> {
-    let len = read_u64(src, pos)? as usize;
+    // Pass the length through as u64 so read_bytes does the usize conversion
+    // under its own checks, rather than truncating here.
+    let len = read_u64(src, pos)?;
     let s = read_bytes(src, pos, len)?;
     String::from_utf8(s).map_err(|e| Error::Msg(format!("invalid utf-8 in GGUF string: {e}")))
 }
@@ -244,6 +295,15 @@ fn read_value<R: Read>(src: &mut R, pos: &mut u64, vt: ValueType) -> Result<Valu
         ValueType::Array => {
             let elem_type = ValueType::from(read_u32(src, pos)?);
             let count = read_u64(src, pos)?;
+            // Same reasoning as kv_count: a crafted count must not panic the
+            // pre-allocation. Arrays are also nested-capable, so this bound is
+            // per-array rather than for the whole file.
+            if count > MAX_METADATA_ENTRIES {
+                return Err(Error::Msg(format!(
+                    "GGUF declares an array of {count} elements, over the \
+                     {MAX_METADATA_ENTRIES} limit"
+                )));
+            }
             let mut items = Vec::with_capacity(count as usize);
             for _ in 0..count {
                 items.push(read_value(src, pos, elem_type)?);

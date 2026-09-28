@@ -24,10 +24,11 @@ pub enum ResourceType {
 }
 
 /// Access level for a resource
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AccessLevel {
-    /// No access
+    /// No access. The default, so an unset grant is never accidentally a grant.
+    #[default]
     None,
     /// Read-only access
     Read,
@@ -37,12 +38,6 @@ pub enum AccessLevel {
     ReadWrite,
     /// Execute access (for compute/device)
     Execute,
-}
-
-impl Default for AccessLevel {
-    fn default() -> Self {
-        AccessLevel::None
-    }
 }
 
 /// A single permission rule

@@ -53,9 +53,7 @@ fn read_header_head(path: &Path) -> Result<Option<GgufHeader>> {
     use std::io::Read;
     let mut f = fs::File::open(path)?;
     let mut magic = [0u8; 4];
-    if f.read_exact(&mut magic).is_err()
-        || u32::from_le_bytes(magic) != gguf::GGUF_MAGIC
-    {
+    if f.read_exact(&mut magic).is_err() || u32::from_le_bytes(magic) != gguf::GGUF_MAGIC {
         return Ok(None);
     }
     let mut stream = magic.as_slice().chain(f);

@@ -146,7 +146,11 @@ pub fn sha256_hex<R: Read>(mut r: R) -> crate::error::Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 /// Compute SHA-256 over an in-memory buffer.

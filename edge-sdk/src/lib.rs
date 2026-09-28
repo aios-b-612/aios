@@ -23,10 +23,7 @@ pub struct LoadedModel {
 /// `<cache>/<name>.gguf` file. Fails if neither exists (or the registry
 /// cannot be read).
 pub fn load(name: &str) -> aios_core::Result<LoadedModel> {
-    let reg = match Registry::load(default_registry_file()) {
-        Ok(r) => r,
-        Err(e) => return Err(e),
-    };
+    let reg = Registry::load(default_registry_file())?;
     if let Some(e) = reg.find(name) {
         if fs::metadata(&e.path).is_ok() {
             return Ok(LoadedModel {
@@ -120,8 +117,7 @@ mod tests {
     }
 
     fn setup() -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("aios-sdk-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("aios-sdk-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

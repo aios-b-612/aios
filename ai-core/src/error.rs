@@ -1,5 +1,6 @@
 //! Error type for aios-core operations.
 
+use std::error::Error as StdError;
 use std::fmt;
 
 #[derive(Debug)]
@@ -13,6 +14,15 @@ impl fmt::Display for Error {
         match self {
             Error::Io(e) => write!(f, "i/o: {e}"),
             Error::Msg(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Error::Io(e) => Some(e),
+            Error::Msg(_) => None,
         }
     }
 }

@@ -18,7 +18,10 @@ mod tasks;
 
 use aios_core::default_models_dir;
 use aios_core::gguf::ValueType;
-use aios_core::{self, cache_path_for, find_models, install_model, list_installed, pretty_bytes, remove_model, Registry, RegistryEntry};
+use aios_core::{
+    self, cache_path_for, find_models, install_model, list_installed, pretty_bytes, remove_model,
+    Registry, RegistryEntry,
+};
 use aios_inference::ComputeBackend;
 use std::io::Read;
 use std::path::Path;
@@ -72,11 +75,11 @@ fn main() {
 }
 
 /// Parse a `--dir DIR` argument from a positional arg stream.
-fn take_dir<'a>(args: &'a [String], i: &mut usize, default: &str) -> Result<String, String> {
+fn take_dir(args: &[String], i: &mut usize, default: &str) -> Result<String, String> {
     if args.get(*i).map(|a| a.as_str()) == Some("--dir") {
         *i += 1;
         args.get(*i)
-            .map(|s| s.clone())
+            .cloned()
             .ok_or_else(|| "--dir requires a path".to_string())
     } else {
         Ok(default.to_string())
@@ -132,7 +135,11 @@ fn cmd_install(args: &[String]) -> i32 {
             println!("  name:   {name}");
             println!("  path:   {}", entry.path);
             println!("  sha256: {}", entry.sha256);
-            println!("  size:   {} ({} bytes)", pretty_bytes(entry.size_bytes), entry.size_bytes);
+            println!(
+                "  size:   {} ({} bytes)",
+                pretty_bytes(entry.size_bytes),
+                entry.size_bytes
+            );
             println!("Installed.");
             0
         }
@@ -216,7 +223,11 @@ fn cmd_info(args: &[String]) -> i32 {
         println!("Name:        {name}");
         println!("Registered:  yes");
         println!("Path:        {}", e.path);
-        println!("Size:        {} ({} bytes)", pretty_bytes(e.size_bytes), e.size_bytes);
+        println!(
+            "Size:        {} ({} bytes)",
+            pretty_bytes(e.size_bytes),
+            e.size_bytes
+        );
         println!("SHA-256:     {}", e.sha256);
         println!("On disk:     {}", if exists { "yes" } else { "no" });
         return if exists { 0 } else { 1 };
@@ -279,10 +290,7 @@ fn cmd_list(args: &[String]) -> i32 {
                 } else {
                     "unknown/unreadable"
                 };
-                println!(
-                    "  {:<28} {:>10}  {}",
-                    m.name, m.size_pretty(), kind
-                );
+                println!("  {:<28} {:>10}  {}", m.name, m.size_pretty(), kind);
             }
 
             let reg_file = aios_core::default_registry_file();
@@ -291,7 +299,12 @@ fn cmd_list(args: &[String]) -> i32 {
                     if !reg.entries().is_empty() {
                         println!("\nRegistry ({reg_file}):");
                         for e in reg.entries() {
-                            println!("  {:<28} {:<20} {}", e.name, e.sha256[..10.min(e.sha256.len())].to_string(), pretty_bytes(e.size_bytes));
+                            println!(
+                                "  {:<28} {:<20} {}",
+                                e.name,
+                                e.sha256[..10.min(e.sha256.len())].to_string(),
+                                pretty_bytes(e.size_bytes)
+                            );
                         }
                     }
                 }
@@ -358,7 +371,10 @@ fn cmd_verify(args: &[String]) -> i32 {
             return 1;
         }
     };
-    println!("{}", aios_core::checksum::sha256_hex(file).unwrap_or_else(|e| format!("error: {e}")));
+    println!(
+        "{}",
+        aios_core::checksum::sha256_hex(file).unwrap_or_else(|e| format!("error: {e}"))
+    );
     0
 }
 
@@ -449,10 +465,21 @@ fn cmd_benchmark(args: &[String]) -> i32 {
 
     println!("AIOS ai benchmark (metadata/checksum/Candle backend)");
     println!("  file:               {path}");
-    println!("  size:               {} ({} bytes)", pretty_bytes(size), size);
+    println!(
+        "  size:               {} ({} bytes)",
+        pretty_bytes(size),
+        size
+    );
     println!("  iter:               {iter}");
-    println!("  GGUF parse:         {parsed_ok}/{n_parse} ok, {:.1} parse/s", n_parse as f64 / parse_secs.max(1e-9));
-    println!("  SHA-256:            {:.2} MiB/s (sample {} bytes)", mib_per_s, head.len());
+    println!(
+        "  GGUF parse:         {parsed_ok}/{n_parse} ok, {:.1} parse/s",
+        n_parse as f64 / parse_secs.max(1e-9)
+    );
+    println!(
+        "  SHA-256:            {:.2} MiB/s (sample {} bytes)",
+        mib_per_s,
+        head.len()
+    );
     infer_benchmark(path, gen_tokens);
     0
 }
@@ -474,7 +501,11 @@ fn infer_benchmark(path: &str, max_tokens: usize) {
                     }
                 };
                 let tps = backend.tokens_per_second();
-                println!("  Candle backend:     {} on {} (load {load_ms} ms)", backend.name(), backend.device());
+                println!(
+                    "  Candle backend:     {} on {} (load {load_ms} ms)",
+                    backend.name(),
+                    backend.device()
+                );
                 println!("  Candle model:       {name}");
                 println!("  Candle generate:    prompt={prompt:?} -> {out:?}");
                 println!("  Candle throughput:  {tps:.2} tokens/s");
@@ -545,7 +576,11 @@ fn cmd_run(args: &[String]) -> i32 {
         eprintln!("error: load {path}: {e}");
         return 1;
     }
-    eprintln!("==> {name}  [{}, load {} ms]", backend.device(), aios_inference::load_time(&backend).as_millis());
+    eprintln!(
+        "==> {name}  [{}, load {} ms]",
+        backend.device(),
+        aios_inference::load_time(&backend).as_millis()
+    );
     match backend.generate(&prompt, max_tokens) {
         Ok(text) => {
             println!("{text}");
@@ -574,7 +609,8 @@ fn resolve_model_path(name: &str) -> Result<String, String> {
     if std::path::Path::new(name).is_file() {
         return Ok(name.to_string());
     }
-    let reg = Registry::load(aios_core::default_registry_file()).map_err(|e| format!("registry: {e}"))?;
+    let reg =
+        Registry::load(aios_core::default_registry_file()).map_err(|e| format!("registry: {e}"))?;
     if let Some(e) = reg.find(name) {
         return Ok(e.path.clone());
     }
@@ -603,7 +639,10 @@ fn cmd_task(args: &[String]) -> i32 {
         println!("Available tasks ({})", router.all().len());
         for t in router.all() {
             let model = t.model.as_deref().unwrap_or("<unset>");
-            println!("  {:<12} {:<40} model={model} max_tokens={}", t.name, t.description, t.max_tokens);
+            println!(
+                "  {:<12} {:<40} model={model} max_tokens={}",
+                t.name, t.description, t.max_tokens
+            );
         }
         return 0;
     }
@@ -763,7 +802,10 @@ fn cmd_doctor() -> i32 {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
-        println!("  {name:12} {path:<24} [{}]", if ok { "OK" } else { "missing" });
+        println!(
+            "  {name:12} {path:<24} [{}]",
+            if ok { "OK" } else { "missing" }
+        );
     }
 
     println!("AIOS doctor");
@@ -775,7 +817,10 @@ fn cmd_doctor() -> i32 {
     println!("\nCache:");
     let models_dir = default_models_dir();
     let dir = Path::new(&models_dir);
-    println!("  models dir {models_dir:24} [{}]", if dir.is_dir() { "OK" } else { "missing" });
+    println!(
+        "  models dir {models_dir:24} [{}]",
+        if dir.is_dir() { "OK" } else { "missing" }
+    );
     match find_models(dir) {
         Ok(list) => println!("  found {} model(s)", list.len()),
         Err(e) => println!("  error scanning: {e}"),

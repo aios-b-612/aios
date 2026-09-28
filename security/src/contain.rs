@@ -77,24 +77,14 @@ impl Default for NetworkConfig {
     }
 }
 
-/// Resource limits
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Resource limits. Every field defaults to `None`, which means unlimited —
+/// spelled out as a derive so the default cannot drift from the field list.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ResourceLimits {
     pub max_memory_mb: Option<u64>,
     pub max_cpu_percent: Option<u8>,
     pub max_pids: Option<u32>,
     pub max_open_files: Option<u64>,
-}
-
-impl Default for ResourceLimits {
-    fn default() -> Self {
-        Self {
-            max_memory_mb: None,
-            max_cpu_percent: None,
-            max_pids: None,
-            max_open_files: None,
-        }
-    }
 }
 
 /// Container status
