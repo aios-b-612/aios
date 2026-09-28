@@ -55,24 +55,48 @@ jobs:
     name: QEMU Boot Test (x86_64)
     runs-on: ubuntu-latest
     needs: test
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install QEMU and dependencies
+      # The upstream Redox tree is ~1 GB and is deliberately not vendored, so
+      # a clean checkout cannot build an image. bootstrap.sh fetches exactly
+      # the revision pinned in platform/upstream.lock.
+      - name: Read the pinned upstream revision
+        id: pin
+        run: |
+          sha=$(sed -n 's/^commit = "\([0-9a-f]\{40\}\)"/\1/p' platform/upstream.lock | head -1)
+          if [ -z "$sha" ]; then
+            echo "::error::could not read commit from platform/upstream.lock"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Report runner capacity
+        run: df -h / "$HOME" | sed -n '1,4p'
+
+      - name: Install QEMU and OVMF
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86_64 ovmf
+          # Ubuntu names these qemu-system-x86 / qemu-system-arm. The
+          # qemu-system-x86_64 and qemu-system-aarch64 names are Debian's and
+          # do not resolve here, which is why this step used to fail.
+          sudo apt-get install -y qemu-system-x86 ovmf
+
+      - name: Cache the pinned Redox upstream
+        uses: actions/cache@v4
+        with:
+          path: redox-os
+          key: redox-upstream-${{ steps.pin.outputs.sha }}
+
+      - name: Fetch the pinned upstream
+        run: ./platform/scripts/bootstrap.sh
 
       - name: Build x86_64 ai-developer image
-        run: |
-          cd platform
-          ./scripts/build.sh -a x86_64 -c ai-developer
+        run: ./platform/scripts/build.sh -a x86_64 -c ai-developer
 
       - name: Run x86_64 boot test
-        run: |
-          cd platform
-          ./scripts/test.sh -a x86_64 -c ai-developer -t 180
+        run: ./platform/scripts/test.sh -a x86_64 -c ai-developer -t 300
 
       - name: Upload boot log on failure
         if: failure()
@@ -89,15 +113,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install QEMU and dependencies
+      - name: Read the pinned upstream revision
+        id: pin
+        run: |
+          sha=$(sed -n 's/^commit = "\([0-9a-f]\{40\}\)"/\1/p' platform/upstream.lock | head -1)
+          if [ -z "$sha" ]; then
+            echo "::error::could not read commit from platform/upstream.lock"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Report runner capacity
+        run: df -h / "$HOME" | sed -n '1,4p'
+
+      - name: Install QEMU and UEFI firmware
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-aarch64 qemu-efi-aarch64
+          # Ubuntu names these qemu-system-arm / qemu-efi-aarch64; the
+          # qemu-system-aarch64 name is Debian's and does not resolve here.
+          sudo apt-get install -y qemu-system-arm qemu-efi-aarch64
+
+      - name: Cache the pinned Redox upstream
+        uses: actions/cache@v4
+        with:
+          path: redox-os
+          key: redox-upstream-${{ steps.pin.outputs.sha }}
+
+      - name: Fetch the pinned upstream
+        run: ./platform/scripts/bootstrap.sh
 
       - name: Build aarch64 ai-edge image
-        run: |
-          cd platform
-          ./scripts/build.sh -a aarch64 -c ai-edge
+        run: ./platform/scripts/build.sh -a aarch64 -c ai-edge
 
       # test.sh exits 2 (BLOCKED) when the kernel boots but userspace never
       # starts — the upstream Redox NVMe hang, which this job cannot fix. That
@@ -108,9 +154,8 @@ jobs:
       - name: Run aarch64 boot test (with GICv3/ITS)
         id: boot
         run: |
-          cd platform
           set +e
-          ./scripts/test.sh -a aarch64 -c ai-edge --gic-v3 -t 600
+          ./platform/scripts/test.sh -a aarch64 -c ai-edge --gic-v3 -t 600
           code=$?
           set -e
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
