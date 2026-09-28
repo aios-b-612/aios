@@ -103,6 +103,19 @@ export PODMAN_BUILD
 export PREFIX_BINARY
 export REPO_BINARY
 
+# `repo cook` draws a TUI unless CI is set, and the TUI has no headless
+# fallback: with no TTY, into_raw_mode() fails the ioctl, and even given a
+# pty it underflows on an empty log buffer. Upstream documents CI=1 as the way
+# to disable it (see `repo cook --help`), so set it whenever there is no
+# terminal to draw on. Building interactively is still possible with
+# AIOS_TUI=1.
+if [ -t 1 ] && [ "${AIOS_TUI:-0}" = "1" ]; then
+    echo "    tui:     enabled (AIOS_TUI=1)"
+else
+    export CI=1
+    echo "    tui:     disabled (CI=1)"
+fi
+
 # In podman mode the Redox build runs the sysroot step inside a container that
 # mounts only the upstream tree, as /mnt/redox. A host path under platform/ is
 # therefore invisible in there, and the build dies with a bare "No such file or
