@@ -1,0 +1,42 @@
+# AIOS - Edge AI OS image profile (Phase 1)
+#
+# Phase 1 scope: bootable minimal image without a desktop, booting to
+# a network-enabled shell. Edge AI service + web panel arrive in Phase 5.
+#
+# KNOWN BLOCKER (aarch64 runtime): the image builds and boots to login, but
+# Redox answers the `tcp:` scheme entirely from its userspace netstack, and
+# netstack aborts at boot under this QEMU configuration, so any in-guest TCP
+# connect (loopback and eth0 alike) fails. Tracked in
+# docs/gotchas/redox-netstack-abort-boot-blocker.md and ROADMAP.md Phase 5.
+# The x86_64 ai-developer profile is the currently validated runtime target.
+
+include = ["../../../redox-os/config/server.toml"]
+
+# General settings
+[general]
+# Filesystem size in MiB
+filesystem_size = 2048
+# Do not prompt if settings are not defined
+prompt = false
+
+# AI Platform groundwork: model cache location (ADR-008)
+[[files]]
+path = "/var/lib/ai"
+data = ""
+directory = true
+mode = 0o755
+
+[[files]]
+path = "/var/lib/ai/models"
+data = ""
+directory = true
+mode = 0o755
+
+# Identify this variant
+[[files]]
+path = "/etc/ai-platform"
+data = """
+name = "aios-edge-os"
+phase = 1
+arch = "aarch64"
+"""
