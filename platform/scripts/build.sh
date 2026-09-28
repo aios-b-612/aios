@@ -89,10 +89,29 @@ fi
 
 export ARCH
 export CONFIG_NAME
-export FILESYSTEM_CONFIG
 export PODMAN_BUILD
 export PREFIX_BINARY
 export REPO_BINARY
+
+# In podman mode the Redox build runs the sysroot step inside a container that
+# mounts only the upstream tree, as /mnt/redox. A host path under platform/ is
+# therefore invisible in there, and the build dies with a bare "No such file or
+# directory" on our config. Stage the config inside the mounted tree and pass
+# the in-container path instead.
+#
+# The container workdir is Redox's, not ours, so it is overridable.
+PODMAN_WORKDIR="${PODMAN_WORKDIR:-/mnt/redox}"
+if [ "${PODMAN_BUILD}" = "1" ]; then
+    STAGE_DIR="${REDOX_SOURCE}/aios-config"
+    mkdir -p "${STAGE_DIR}"
+    STAGED_CONFIG="${STAGE_DIR}/$(basename "${FILESYSTEM_CONFIG}")"
+    cp "${FILESYSTEM_CONFIG}" "${STAGED_CONFIG}"
+    CONTAINER_CONFIG="${PODMAN_WORKDIR}/aios-config/$(basename "${STAGED_CONFIG}")"
+    echo "    staged:   ${CONTAINER_CONFIG}"
+else
+    CONTAINER_CONFIG="${FILESYSTEM_CONFIG}"
+fi
+export FILESYSTEM_CONFIG="${CONTAINER_CONFIG}"
 
 echo "==> AIOS build"
 echo "    type:     ${CONFIG_NAME} (${ARCH})"
