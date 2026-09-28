@@ -409,6 +409,23 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// `scaffold` resolves the workspace through the process-wide
+    /// `AIOS_WORKSPACE`, so every test here is affected by every other one.
+    /// `fails_clearly_when_the_workspace_is_absent` in particular points that
+    /// variable at a directory which is deliberately NOT a workspace, so any
+    /// test that overlaps it gets `NoWorkspace` instead of the workspace it
+    /// built. Serializing them removes the race for the cost of a mutex.
+    ///
+    /// This is a real flake: it surfaced in CI as
+    /// `generated_cargo_toml_declares_its_own_workspace` failing while every
+    /// test in the crate passed on its own.
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let m = LOCK.get_or_init(|| Mutex::new(()));
+        m.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     /// A throwaway AIOS-shaped workspace: the scaffolder only needs the crate
     /// directories and the root manifest to exist.
@@ -432,6 +449,7 @@ mod tests {
 
     #[test]
     fn scaffolds_every_template_and_produces_a_valid_manifest() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("ws");
         fake_workspace(&ws);
@@ -452,6 +470,7 @@ mod tests {
 
     #[test]
     fn generated_manifest_parses_from_disk_and_round_trips() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("ws");
         fake_workspace(&ws);
@@ -464,6 +483,7 @@ mod tests {
 
     #[test]
     fn path_dependencies_resolve_from_the_generated_project() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("ws");
         fake_workspace(&ws);
@@ -489,6 +509,7 @@ mod tests {
 
     #[test]
     fn generated_cargo_toml_declares_its_own_workspace() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("ws");
         fake_workspace(&ws);
@@ -503,6 +524,7 @@ mod tests {
 
     #[test]
     fn edge_service_template_requests_isolation() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("ws");
         fake_workspace(&ws);
@@ -518,6 +540,7 @@ mod tests {
 
     #[test]
     fn minimal_template_omits_a_target_so_it_builds_on_any_host() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("ws");
         fake_workspace(&ws);
@@ -528,6 +551,7 @@ mod tests {
 
     #[test]
     fn refuses_to_overwrite_an_existing_directory() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("ws");
         fake_workspace(&ws);
@@ -539,6 +563,7 @@ mod tests {
 
     #[test]
     fn rejects_an_unknown_template_by_name() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let err = scaffold(tmp.path(), "myapp", "does-not-exist").unwrap_err();
         match err {
@@ -552,6 +577,7 @@ mod tests {
 
     #[test]
     fn fails_clearly_when_the_workspace_is_absent() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         // Point AIOS_WORKSPACE at a directory that is not a workspace.
@@ -589,6 +615,7 @@ mod tests {
 
     #[test]
     fn scaffold_outside_the_checkout_uses_absolute_dependency_paths() {
+        let _guard = env_lock();
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("ws");
         fake_workspace(&ws);

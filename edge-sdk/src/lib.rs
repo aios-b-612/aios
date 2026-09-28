@@ -106,6 +106,23 @@ pub fn generate_with_metrics(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    /// `load` reads its configuration from process-wide environment variables,
+    /// so these tests cannot run concurrently: whichever test set the variables
+    /// last wins for everyone. The lock serializes them, which is cheap for
+    /// four tests and does not depend on scheduling luck.
+    ///
+    /// This was a real flake, not a hypothetical one. The tests used to share
+    /// a directory derived only from the process id and wipe it on setup, so a
+    /// parallel `setup()` deleted another test's fixture and its `AIOS_MODELS_DIR`
+    /// pointed somewhere the model was not. It passed in CI for several runs and
+    /// then failed on `load_via_cache_file` with "model 'tiny' not found".
+    fn env_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let m = LOCK.get_or_init(|| Mutex::new(()));
+        m.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     fn gguf_bytes() -> Vec<u8> {
         let mut b = Vec::new();
@@ -116,8 +133,12 @@ mod tests {
         b
     }
 
-    fn setup() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("aios-sdk-test-{}", std::process::id()));
+    /// A directory unique to this test, not just to this process. Callers hold
+    /// the environment lock for the whole test, so the name only has to be
+    /// stable and collision-free.
+    fn setup(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("aios-sdk-test-{}-{}", std::process::id(), name));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -125,7 +146,8 @@ mod tests {
 
     #[test]
     fn load_via_registry() {
-        let dir = setup();
+        let _guard = env_lock();
+        let dir = setup("registry");
         let cache = dir.join("models");
         fs::create_dir_all(&cache).unwrap();
         let src = cache.join("m.gguf");
@@ -149,7 +171,8 @@ mod tests {
 
     #[test]
     fn load_via_cache_file() {
-        let dir = setup();
+        let _guard = env_lock();
+        let dir = setup("cache-file");
         let cache = dir.join("models");
         fs::create_dir_all(&cache).unwrap();
         fs::write(cache.join("tiny.gguf"), gguf_bytes()).unwrap();
@@ -165,7 +188,8 @@ mod tests {
 
     #[test]
     fn load_missing_model_fails() {
-        let dir = setup();
+        let _guard = env_lock();
+        let dir = setup("missing");
         std::env::set_var("AIOS_MODELS_DIR", dir.join("models").as_path());
         std::env::set_var("AIOS_REGISTRY", dir.join("empty.tsv").as_path());
         assert!(load("nope").is_err());
