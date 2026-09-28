@@ -158,6 +158,12 @@ echo "    qemu:   $(command -v "${QEMU_BIN}")"
 echo "    accel:  ${ACCEL_ARGS:-tcg}"
 echo "    timeout: ${TIMEOUT_SECS}s"
 
+# The console log is the only evidence of what the guest actually did, so it
+# is written to a stable path and kept on exit. CI uploads it as an artifact
+# and a boot failure with no log is unactionable.
+BOOT_LOG="${BOOT_LOG:-/tmp/aios-boot-${ARCH}.log}"
+mkdir -p "$(dirname "${BOOT_LOG}")"
+
 OUT=$(mktemp)
 cleanup() { rm -f "${OUT}"; }
 trap cleanup EXIT
@@ -165,18 +171,24 @@ trap cleanup EXIT
 # Headless serial console test. The serial console is used both to observe
 # the boot and to drive a session: log in as `user` and verify the Phase 1
 # image content placeholders are present in the guest.
+#
+# The subshell is a scripted stdin, not evidence: once the guest stops
+# reading -- which is what a failed boot looks like -- printf gets SIGPIPE.
+# That is expected here, so it is ignored rather than printed as a wall of
+# "write error: Broken pipe" that buries the real result.
 set +e
 (
+    trap '' PIPE
     sleep "${LOGIN_DELAY}"
-    printf 'user\n'
+    printf 'user\n' || true
     sleep 2
-    printf 'ls /var/lib/ai\n'
+    printf 'ls /var/lib/ai\n' || true
     sleep 2
-    printf 'cat /etc/ai-platform\n'
+    printf 'cat /etc/ai-platform\n' || true
     sleep 2
-    printf 'exit\n'
+    printf 'exit\n' || true
     sleep 2
-) | timeout --foreground "${TIMEOUT_SECS}" "${QEMU_BIN}" \
+) 2>/dev/null | timeout --foreground "${TIMEOUT_SECS}" "${QEMU_BIN}" \
     ${ACCEL_ARGS} \
     ${BIOS_ARGS} \
     -machine "${MACHINE}" -cpu "${CPU}" -smp "${SMP}" -m "${MEM}" \
@@ -185,6 +197,11 @@ set +e
     -vga none -serial stdio -monitor none -no-reboot > "${OUT}" 2>&1
 status=${PIPESTATUS[1]}
 set -e
+
+# Publish the console log before interpreting it, so it survives both a
+# milestone miss and an early QEMU exit.
+cat "${OUT}" > "${BOOT_LOG}"
+echo "    log:    ${BOOT_LOG}"
 
 echo
 # The guest never powers itself off, so TIMEOUT (124) is the expected end

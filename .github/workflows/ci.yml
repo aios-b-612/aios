@@ -107,11 +107,14 @@ jobs:
       - name: Run x86_64 boot test
         run: ./platform/scripts/test.sh -a x86_64 -c ai-developer -t 300
 
-      - name: Upload boot log on failure
-        if: failure()
+      - name: Upload boot log
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: x86_64-boot-log
+          # if-no-files-found: warn -- a build that dies before the boot test
+          # leaves no log, and that should not itself be a hard error.
+          if-no-files-found: warn
           path: /tmp/aios-boot-*.log
 
   boot-test-aarch64:
@@ -192,4 +195,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aarch64-boot-log
+          if-no-files-found: warn
           path: /tmp/aios-boot-*.log
