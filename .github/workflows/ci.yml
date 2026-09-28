@@ -92,6 +92,11 @@ jobs:
       - name: Fetch the pinned upstream
         run: ./platform/scripts/bootstrap.sh
 
+      # The native build (-n) needs cbindgen/nasm/just on the host, which the
+      # podman path would have supplied from the redox-base container.
+      - name: Install native build host dependencies
+        run: ./platform/scripts/host-deps.sh
+
       # -n forces the native build. The podman path is auto-detected on these
       # runners (podman is preinstalled) but is unvalidated for our profiles:
       # they include upstream's config/server.toml by a relative path that
@@ -145,6 +150,11 @@ jobs:
 
       - name: Fetch the pinned upstream
         run: ./platform/scripts/bootstrap.sh
+
+      # The native build (-n) needs cbindgen/nasm/just on the host, which the
+      # podman path would have supplied from the redox-base container.
+      - name: Install native build host dependencies
+        run: ./platform/scripts/host-deps.sh
 
       - name: Build aarch64 ai-edge image
         run: ./platform/scripts/build.sh -a aarch64 -c ai-edge -n
