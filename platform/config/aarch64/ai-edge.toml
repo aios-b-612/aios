@@ -3,12 +3,19 @@
 # Phase 1 scope: bootable minimal image without a desktop, booting to
 # a network-enabled shell. Edge AI service + web panel arrive in Phase 5.
 #
-# KNOWN BLOCKER (aarch64 runtime): the image builds and boots to login, but
-# Redox answers the `tcp:` scheme entirely from its userspace netstack, and
-# netstack aborts at boot under this QEMU configuration, so any in-guest TCP
-# connect (loopback and eth0 alike) fails. Tracked in
-# docs/gotchas/redox-netstack-abort-boot-blocker.md and ROADMAP.md Phase 5.
+# KNOWN BLOCKER (aarch64 runtime): the image builds and the kernel boots, but
+# the kernel never reaches the login prompt. The NVMe driver hangs at
+# namespace enumeration and the IRQ is never delivered. Enabling
+# `gic-version=3,its=on,iommu=smmuv3` does NOT fix it: a boot canary run with
+# those settings (900s, TCG) reached the bootloader, EL1 and kernel_entry, then
+# stalled before `login:`. This is upstream Redox, not an AIOS defect.
+#
+# Because the netstack daemon starts as part of initfs userspace, the login
+# milestone is also the first point where the `tcp:` scheme is reachable, so
+# in-guest TCP cannot be exercised on this target at all.
+#
 # The x86_64 ai-developer profile is the currently validated runtime target.
+# See docs/gotchas/aarch64-nvmed-not-reproducible.md and ROADMAP.md Phase 5.
 
 include = ["../../../redox-os/config/server.toml"]
 

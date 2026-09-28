@@ -10,6 +10,13 @@
 #   -t SECONDS   test timeout (default: 600 for aarch64, 120 otherwise)
 #   --gic-v3     enable GICv3/ITS on QEMU virt machine (aarch64 only)
 #
+# Exit codes:
+#   0  PASS     all milestones for the arch were reached
+#   1  FAIL     a milestone the image is expected to reach was missed
+#   2  BLOCKED  (aarch64 only) the kernel booted, but userspace never started
+#               because of the upstream NVMe hang. Distinct from FAIL on
+#               purpose: 2 means "blocked outside this repo", 1 means "broken".
+#
 # Environment:
 #   REDOX_SOURCE  upstream redox tree (default <platform>/../redox-os)
 #   QEMU_BIN      override qemu binary
@@ -201,27 +208,37 @@ check_milestone() {
 }
 
 ok=1
+blocked=0
 if [ "${ARCH}" = "aarch64" ]; then
-    # aarch64 currently reaches the kernel + initfs, but the NVMe driver
-    # stack-overflows (guard page hit) on master, so login cannot be reached
-    # under QEMU. Track the upstream blocker; fail the canary if even the
-    # kernel no longer boots.
+    # Hard requirement on aarch64: the kernel must boot. These are the
+    # milestones the image can actually reach today.
     check_milestone "Redox OS Bootloader" || ok=0
     check_milestone "Currently in EL1" || ok=0
     check_milestone "kernel_entry" || ok=0
-    # With GICv3/ITS, we expect to reach the login prompt
-    if [ "${GIC_V3}" -eq 1 ]; then
-        check_milestone "login:" || ok=0
-        check_milestone "models" || ok=0
-        check_milestone "${VARIANT_MARKER}" || ok=0
-    fi
-    if [ "${ok}" -eq 1 ]; then
-        if [ "${GIC_V3}" -eq 1 ]; then
-            echo "  [INFO] aarch64 with GICv3: checking for login prompt"
+
+    # The login prompt and everything after it are upstream-blocked: the NVMe
+    # driver hangs at namespace enumeration and the IRQ is never delivered, so
+    # userspace never starts. `--gic-v3` does not change this — verified with a
+    # 900s canary run (gic-version=3, its=on, iommu=smmuv3, TCG), which stalled
+    # after kernel_entry every time.
+    #
+    # These are reported as BLOCKED rather than FAIL, because a FAIL here would
+    # mean "this image is broken" and would make the canary permanently red for
+    # a defect we do not control. The kernel milestones above stay hard failures
+    # so genuine regressions are still caught.
+    for milestone in "login:" "models" "${VARIANT_MARKER}"; do
+        if grep -qF "$milestone" "${OUT}"; then
+            echo "  [OK]   ${milestone}"
         else
-            echo "  [WARN] aarch64 userland blocked upstream: initfs nvmed stack-overflow"
-            echo "         (see docs/REDOX_AUDIT.md, ROADMAP.md Phase 5)"
+            echo "  [BLOCKED] ${milestone}"
+            blocked=1
         fi
+    done
+    if [ "${blocked}" -eq 1 ]; then
+        echo "  [WARN] aarch64 userland not reached: upstream Redox NVMe hangs at"
+        echo "         namespace enumeration under QEMU; GICv3/ITS+SMMUv3 does not"
+        echo "         help. See docs/gotchas/aarch64-nvmed-not-reproducible.md"
+        echo "         and ROADMAP.md Phase 5."
     fi
 else
     check_milestone "login:" || ok=0
@@ -229,10 +246,17 @@ else
     check_milestone "${VARIANT_MARKER}" || ok=0
 fi
 
-if [ "${ok}" -eq 1 ]; then
-    echo "RESULT: PASS"
-    exit 0
-else
+if [ "${ok}" -eq 0 ]; then
     echo "RESULT: FAIL (boot milestones not all reached)" >&2
     exit 1
 fi
+
+if [ "${blocked}" -eq 1 ]; then
+    # Kernel booted, userspace blocked upstream. Not a pass: report it as such
+    # so nobody reads a green exit code as "aarch64 boots".
+    echo "RESULT: BLOCKED (kernel booted; userspace blocked upstream)" >&2
+    exit 2
+fi
+
+echo "RESULT: PASS"
+exit 0
