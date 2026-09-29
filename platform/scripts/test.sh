@@ -91,6 +91,23 @@ if [ ! -f "${IMG}" ]; then
     exit 2
 fi
 
+# An ISO is a CD-ROM image, not a disk image. Handing it to QEMU as an NVMe
+# or IDE drive produced a silent hang with no console output at all, because
+# the El Torito bootloader is only wired into the emulated CD-ROM. Upstream
+# mounts the live image the same way (mk/qemu.mk: -boot d -cdrom $(DISK)).
+MEDIA="disk"
+case "${IMG}" in
+    *.iso) MEDIA="cdrom" ;;
+esac
+
+media_args() {
+    if [ "${MEDIA}" = "cdrom" ]; then
+        echo "-drive file=${IMG},format=raw,media=cdrom,readonly=on -boot d"
+    else
+        echo "-drive file=${IMG},format=raw"
+    fi
+}
+
 # Per-architecture QEMU args (mirrors upstream mk/qemu.mk defaults)
 case "${ARCH}" in
     x86_64)
@@ -98,15 +115,33 @@ case "${ARCH}" in
         CPU="core2duo"
         SMP=4
         MEM=2048
-        DISK_ARGS="-drive file=${IMG},format=raw,if=none,id=drv0 -device nvme,drive=drv0,serial=NVME_SERIAL"
+        DISK_ARGS="$(media_args)"
         NET_ARGS="-device e1000,netdev=net0 -netdev user,id=net0"
+        if [ "${MEDIA}" = "cdrom" ]; then
+            # The live ISO is UEFI-only (El Torito with no BIOS boot entry), so
+            # SeaBIOS cannot start it. And live mode copies the whole RedoxFS
+            # into low RAM, so the guest must have room for it: the filesystem
+            # is loaded below the 8 GiB paging boundary, so 2 GiB is not enough.
+            MEM=8192
+            for fw in \
+                /usr/share/OVMF/OVMF_CODE_4M.fd \
+                /usr/share/OVMF/OVMF_CODE.fd \
+                /usr/share/ovmf/OVMF_CODE.fd \
+                /usr/share/ovmf/OVMF.fd \
+                /usr/share/OVMF/OVMF.fd
+            do
+                [ -f "${fw}" ] && { PFLASH0="${fw}"; break; }
+            done
+            [ -n "${PFLASH0:-}" ] || { echo "ERROR: no x86_64 UEFI firmware found (need OVMF)" >&2; exit 2; }
+            LOGIN_DELAY="${LOGIN_DELAY:-120}"
+        fi
         ;;
     aarch64)
         MACHINE="virt"
         CPU="max"
         SMP=1
         MEM=2048
-        DISK_ARGS="-drive file=${IMG},format=raw,if=none,id=drv0 -device nvme,drive=drv0,serial=NVME_SERIAL"
+        DISK_ARGS="$(media_args)"
         NET_ARGS="-device e1000,netdev=net0 -netdev user,id=net0"
         # UEFI firmware required to boot aarch64 (no SeaBIOS on this machine).
         # Prefer the edk2 firmware shipped with qemu-efi-aarch64.
@@ -124,7 +159,7 @@ case "${ARCH}" in
         CPU="pentium2"
         SMP=1
         MEM=1024
-        DISK_ARGS="-drive file=${IMG},format=raw"
+        DISK_ARGS="$(media_args)"
         NET_ARGS="-device e1000,netdev=net0 -netdev user,id=net0"
         ;;
     *)
@@ -149,6 +184,12 @@ if [ "${GIC_V3}" -eq 1 ]; then
     LOGIN_DELAY=$((LOGIN_DELAY + 60))
 fi
 if [ -n "${BIOS}" ]; then BIOS_ARGS="-bios ${BIOS}"; else BIOS_ARGS=""; fi
+# Split OVMF (code-only pflash) is the common Debian/Ubuntu layout and is what
+# the live-ISO path uses; the combined OVMF.fd goes through -bios instead.
+PFLASH_ARGS=""
+if [ -n "${PFLASH0:-}" ]; then
+    PFLASH_ARGS="-drive if=pflash,format=raw,readonly=on,unit=0,file=${PFLASH0}"
+fi
 
 echo "==> AIOS boot test"
 echo "    arch:   ${ARCH}"
@@ -196,6 +237,7 @@ set +e
 ) 2>/dev/null | timeout --foreground "${TIMEOUT_SECS}" "${QEMU_BIN}" \
     ${ACCEL_ARGS} \
     ${BIOS_ARGS} \
+    ${PFLASH_ARGS} \
     -machine "${MACHINE}" -cpu "${CPU}" -smp "${SMP}" -m "${MEM}" \
     ${DISK_ARGS} \
     ${NET_ARGS} \

@@ -19,8 +19,23 @@ include = ["../../../redox-os/config/server.toml"]
 
 # General settings
 [general]
-# Filesystem size in MiB (sparse on host; bumped for the Rust toolchain)
-filesystem_size = 8192
+# Filesystem size in MiB (sparse on host).
+#
+# The installed content is ~0.9 GiB, so this leaves ~2 GiB of scratch room
+# for cargo/rustc inside the guest.
+#
+# The ceiling here is NOT arbitrary: a bootable live ISO needs the whole
+# filesystem to fit in guest RAM. The live bootloader allocates one contiguous
+# block for the entire RedoxFS below 8 GiB (src/os/uefi/mod.rs, AllocateMaxAddress
+# = 0x2_0000_0000), because a CD-ROM is read-only and the live session works on
+# a RAM copy. Under QEMU the low-memory MMIO hole splits that region, so the
+# largest usable contiguous block is ~3 GiB. Measured: 3072 boots, 3584 dies in
+# the bootloader with SETUP PANIC "out of resources".
+#
+# Raising this past ~3 GiB silently breaks the live ISO (harddrive.img keeps
+# working, which is what makes it confusing). See
+# docs/gotchas/live-iso-ram-ceiling.md.
+filesystem_size = 3072
 # Do not prompt if settings are not defined
 prompt = false
 
