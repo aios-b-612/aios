@@ -298,7 +298,7 @@ guest. É a linha de base do comparativo — falta o outro lado. Ver Fase 4.
 - [ ] Imagem RPi (validada na fase 6).
 - [ ] Documentação completa + exemplos liberados.
 - [ ] Benchmarks publicados.
-- [ ] Website público (site/ estático + GitHub Pages).
+- [ ] Website público (repositório de páginas dedicado, ADR-022).
 - [ ] CONTRIBUTING/ROADMAP público.
 - [x] CI completo na plataforma (format/lint/unit/integration/build/CLI + QEMU boot x86_64 + canary aarch64).
 
@@ -306,11 +306,17 @@ guest. É a linha de base do comparativo — falta o outro lado. Ver Fase 4.
 
 **Status**: metade feita, e o que falta depende de fora.
 
-Correção de registro (2026-09-28): o item "Website público (site/ estático +
-GitHub Pages)" estava marcado como entregue, mas não existe `site/` nem um
-único `.html` em nenhuma branch, e não há workflow de Pages em `.github/`. O
-item foi desmarcado. O único conteúdo de documentação que existe é
-`docs/`+ este ROADMAP; a publicação é trabalho a fazer, não feito.
+Correção de registro (2026-09-28): o item "Website público" estava marcado como
+entregue, mas não existe `site/` nem um único `.html` em nenhuma branch, e não há
+workflow de Pages em `.github/`. O item foi desmarcado. O único conteúdo de
+documentação que existe é `docs/`+ este ROADMAP; a publicação é trabalho a
+fazer, não feito.
+
+O item também estava escrito errado: dizia `site/` neste repositório, mas o
+ADR-022 decidiu que o site vive em repositório dedicado
+(`aios-b-612/aios-b-612.github.io`), justamente para o código do SO não carregar
+artefatos de site. Por isso não existe e não deve existir um `site/` aqui — o que
+falta é o repositório de páginas, que é trabalho fora deste repositório.
 
 Entregue (`f2e8d09`, `9fac75a`):
 - `platform/` versionado com `upstream.lock` pinado, `bootstrap.sh --verify` e
