@@ -296,15 +296,25 @@ guest. É a linha de base do comparativo — falta o outro lado. Ver Fase 4.
 **Entregas**:
 - [x] ISO Developer OS regenerável.
 - [ ] Imagem RPi (validada na fase 6).
-- [ ] Documentação completa + exemplos liberados.
-- [ ] Benchmarks publicados.
+- [x] Documentação completa + exemplos liberados.
+- [x] Benchmarks publicados.
 - [ ] Website público (repositório de páginas dedicado, ADR-022).
-- [ ] CONTRIBUTING/ROADMAP público.
+- [x] CONTRIBUTING/ROADMAP público.
 - [x] CI completo na plataforma (format/lint/unit/integration/build/CLI + QEMU boot x86_64 + canary aarch64).
 
 **Critério**: `make release` produz artefatos reprodutíveis; CI verde com boot QEMU em todos os PRs.
 
-**Status**: metade feita, e o que falta depende de fora.
+**Status**: o que falta depende de fora. Fica a imagem RPi (precisa de
+hardware) e o site (precisa do repositório de páginas).
+
+Documentação e exemplos: `CONTRIBUTING.md` na raiz, `docs/benchmarks.md`
+com os números medidos e o método, e `examples/` com quatro scripts executáveis e
+validados um a um — ciclo de vida de modelo (sem download, GGUF sintético de 24
+bytes), inferência real (`ai run`/`benchmark`/`task`, exige o modelo de 638 MiB),
+daemon `edge` em loopback, e política de segurança com allow e deny. Os exemplos
+também registram as três armadilhas que custaram tempo aqui: `AIOS_REGISTRY` é
+obrigatório fora do guest, o tokenizer precisa estar ao lado do `.gguf`, e o
+`edge serve` escuta em `0.0.0.0` por padrão.
 
 Correção de registro (2026-09-28): o item "Website público" estava marcado como
 entregue, mas não existe `site/` nem um único `.html` em nenhuma branch, e não há
