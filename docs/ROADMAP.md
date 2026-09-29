@@ -146,6 +146,30 @@ no runner sem display, que é a configuração que de fato importa.
 
 **Critério**: SD card com Redox Edge AI OS boota RPi 3B+ até o serviço de IA; `edge status` via rede local funciona; temperatura/estado lidos.
 
+**Status**: bloqueada por falta de hardware. Nada aqui é fechável por software.
+
+A perna de software existe e está testada — o `aios-deploy` faz o deploy
+completo e o `aios-edge` é o daemon alvo (Fase 7). O que falta é o **critério**,
+que é explicitamente sobre RPi 3B+ real:
+
+- **Sem Raspberry Pi disponível.** Nenhum 3B/3B+/4/5 nesta máquina ou acessível.
+  As entregas da fase são literalmente "confirmar no Redox", "imagem de boot
+  para o board" e "empacotar para o board" — todas exigem o device.
+- **QEMU `virt` aarch64 não é substituto válido.** O kernel sobe até
+  `kernel_entry` (EL1) e morre num hang de NVMe do upstream antes do userspace
+  (`docs/gotchas/aarch64-nvmed-not-reproducible.md`). Rodar a Edge AI OS em
+  aarch64 emulado exigiria   *patchear o kernel do upstream*, e o patch local de
+  `nvmed` (`61d483a`) não é reproduzível a partir deste meta-repo. Aceitar o
+  QEMU como "RPi validado" seria exatamente o tipo de proxy que o critério proíbe.
+
+- **U-Boot do RPi não é validável aqui.** O `redox_firmware` (u-boot-rpi-3-b-plus)
+  é baixado pelo build, mas não há board para executá-lo; só dá para dizer que o
+  artefato existe.
+
+O que seria necessário para fechar: um RPi 3B+ com fonte e cartão SD, o
+`redox_firmware` correspondente, e rodar a sequência U-Boot → kernel → console
+UART → `edge status` pela rede local.
+
 ---
 
 ## FASE 7 — DEPLOYMENT
@@ -245,6 +269,24 @@ policy nega. Ver `docs/gotchas/security-isolation.md`.
 
 **Critério**: benchmark comparativo CPU vs acelerado, só com suporte real no Redox.
 
+**Status**: bloqueada por falta de suporte no upstream, não por falta de código.
+
+O critério é explícito: benchmark CPU **vs acelerado**, "só com suporte real no
+Redox". As três entregas dependem de coisas que não existem no alvo:
+
+- **GPU (Intel)**: o Redox não tem um driver de GPU utilizável para compute, e
+  não há backend OpenCL/Vulkan no upstream. Não existe contra o que benchmarkar,
+  então produzir um número "acelerado" seria inventar o denominador.
+- **NPU (RPi)**: depende da Fase 6 (sem hardware) **e** de driver — o NPU do RPi
+  não tem suporte no Redox.
+- **SIMD / feature flags no Candle**: esta parte é software e é fechável, mas
+  isolada ela não satisfaz o critério da fase, que é comparativo. Medir
+  throughput de AVX2 vs scalar no host x86_64 não diz nada sobre o alvo.
+
+O que já existe e é real: `ai benchmark` mede o caminho **CPU** de verdade
+(Candle, GGUF parse em streaming, SHA-256), com números reportados de host e de
+guest. É a linha de base do comparativo — falta o outro lado. Ver Fase 4.
+
 ---
 
 ## FASE 10 — DEVELOPER PREVIEW
@@ -252,7 +294,7 @@ policy nega. Ver `docs/gotchas/security-isolation.md`.
 **Meta**: publicação e adoção.
 
 **Entregas**:
-- [ ] ISO Developer OS regenerável.
+- [x] ISO Developer OS regenerável.
 - [ ] Imagem RPi (validada na fase 6).
 - [ ] Documentação completa + exemplos liberados.
 - [ ] Benchmarks publicados.
@@ -275,12 +317,43 @@ Entregue (`f2e8d09`, `9fac75a`):
   `exit 0` incondicional e mascarava regressão real.
 
 Lacunas:
-- **ISO de produção**: a release encontra `harddrive.img`, não uma ISO
-  instalável. `make release` não satisfaz o critério ainda.
 - Imagem RPi depende da Fase 6.
 - "CI verde com boot QEMU em todos os PRs": o x86_64 sobe; o aarch64 fica
   bloqueado em `kernel_entry` pelo hang de NVMe upstream, então o job roda como
   notice, não como prova de boot.
+
+### ISO regenerável e instalável (`7c01354`, `8a4268a`)
+
+Fechado. `make release` agora produz `ai-developer-x86_64-redox-live.iso`, que
+sobe até `redox login:` e passa nos três marcos do boot test.
+
+Três defeitos distintos estavam entre a release e a ISO bootável, e dois deles
+falhavam **em silêncio** (log de 72 bytes, sem uma linha de diagnóstico):
+
+- **`repo cook` não tem modo headless.** O TUI não tem fallback; sem TTY o
+  `into_raw_mode()` morre no ioctl, e com pty ele dá underflow no buffer de log
+  vazio. O próprio upstream documenta `CI=1` como a forma de desligar o TUI, e
+  ninguém passava. O build x86_64 passava antes só porque `repo.tag` já
+  existia e o build pulava o `cook`; pedir o alvo `live` invalidava a tag e
+  batia no TUI.
+- **ISO é CD-ROM, não disco.** O `test.sh` entregava a ISO ao QEMU como NVMe e
+  o boot pendurava sem log — o caminho El Torito só existe na mídia de CD-ROM
+  emulada. Agora usa `media=cdrom` + `-boot d`, como o próprio `mk/qemu.mk` faz.
+- **A ISO é UEFI-only.** O build emite `bootloader-live.efi` e não há
+  `bootloader-live.bios` utilizável, então SeaBIOS não sobe. O caminho de ISO
+  carrega OVMF por pflash.
+- **`filesystem_size` teve de cair de 8192 para 3072 MiB.** O bootloader live
+  copia o RedoxFS inteiro para a RAM num bloco contíguo abaixo de 8 GiB, e o
+  buraco MMIO do QEMU deixa ~3 GiB como maior bloco livre. Medido: 3072 boota,
+  3584+ morre com `SETUP PANIC ... "out of resources"`. O conteúdo instalado
+  ocupa ~0.9 GiB, então sobram ~2 GiB de rascunho para `cargo` no guest.
+
+Detalhe completo em `docs/gotchas/live-iso-ram-ceiling.md`.
+
+Ressalva honesta: o job de boot do CI continua no `harddrive.img`, porque
+`ubuntu-latest` tem ~7 GB e não hospeda o QEMU de `-m 8192` que o boot live
+exige. A ISO é validada localmente, não no CI — o que é menos do que a frase
+"CI verde" sugere.
 
 ---
 
