@@ -298,13 +298,19 @@ guest. É a linha de base do comparativo — falta o outro lado. Ver Fase 4.
 - [ ] Imagem RPi (validada na fase 6).
 - [ ] Documentação completa + exemplos liberados.
 - [ ] Benchmarks publicados.
-- [x] Website público (site/ estático + GitHub Pages).
+- [ ] Website público (site/ estático + GitHub Pages).
 - [ ] CONTRIBUTING/ROADMAP público.
 - [x] CI completo na plataforma (format/lint/unit/integration/build/CLI + QEMU boot x86_64 + canary aarch64).
 
 **Critério**: `make release` produz artefatos reprodutíveis; CI verde com boot QEMU em todos os PRs.
 
 **Status**: metade feita, e o que falta depende de fora.
+
+Correção de registro (2026-09-28): o item "Website público (site/ estático +
+GitHub Pages)" estava marcado como entregue, mas não existe `site/` nem um
+único `.html` em nenhuma branch, e não há workflow de Pages em `.github/`. O
+item foi desmarcado. O único conteúdo de documentação que existe é
+`docs/`+ este ROADMAP; a publicação é trabalho a fazer, não feito.
 
 Entregue (`f2e8d09`, `9fac75a`):
 - `platform/` versionado com `upstream.lock` pinado, `bootstrap.sh --verify` e
