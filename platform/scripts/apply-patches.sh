@@ -102,10 +102,12 @@ lock_section_value() {
 
 # --- target recipe ---------------------------------------------------------
 
-# Each patch targets one cookbook recipe. Adding a patch to a different recipe
-# means adding a case here.
+# Each patch targets one cookbook recipe, and that recipe must also be forced to
+# the "source" rule. Adding a patch to a different recipe means adding a case
+# here.
 RECIPE_REL="recipes/core/base/recipe.toml"
 RECIPE="${REDOX_SOURCE}/${RECIPE_REL}"
+RECIPE_NAME="base"
 [ -f "${RECIPE}" ] || { err "missing recipe ${RECIPE_REL} in ${REDOX_SOURCE}"; exit 1; }
 
 PATCH_NAMES=()
@@ -122,6 +124,61 @@ if [ ${#PATCH_NAMES[@]} -eq 0 ]; then
     log "no ${ARCH} patches declared; nothing to do"
     exit 0
 fi
+
+LOCK_OVERRIDE="${REDOX_SOURCE}/cookbook.lock"
+
+# The build defaults to REPO_BINARY=1, which makes the cookbook download a
+# prebuilt source.pkgar for a patched recipe instead of fetching its source. A
+# patch would then be silently skipped, so the recipe is pinned to the "source"
+# rule in cookbook.lock, which overrides both the recipe default and
+# --repo-binary. cookbook.lock is only ever written by `repo change-rule*`, so
+# the entry persists across builds; it is still managed here so a clean tree
+# gets it without a separate repo invocation.
+#
+# Equivalent to: repo change-rule-local base --set-rule=source
+write_lock_entry() {
+    if lock_is_correct; then
+        log "cookbook.lock already pins ${RECIPE_NAME} to source"
+        return 0
+    fi
+
+    if [ -f "${LOCK_OVERRIDE}" ] && grep -q "^\[recipes\.${RECIPE_NAME}\]$" "${LOCK_OVERRIDE}"; then
+        # Replace just this recipe's table, leave other entries alone.
+        awk -v name="${RECIPE_NAME}" '
+            $0 == "[recipes." name "]" {
+                skip = 1
+                print "[recipes." name "]"
+                print "fsrule = \"source\""
+                next
+            }
+            /^\[/ {
+                # Restore the blank line the skipped block used to end with, so
+                # the file keeps the shape `repo change-rule` writes.
+                if (skip) print ""
+                skip = 0
+                print
+                next
+            }
+            !skip { print }
+        ' "${LOCK_OVERRIDE}" > "${LOCK_OVERRIDE}.tmp"
+        mv "${LOCK_OVERRIDE}.tmp" "${LOCK_OVERRIDE}"
+    elif [ -f "${LOCK_OVERRIDE}" ]; then
+        printf '[recipes.%s]\nfsrule = "source"\n' "${RECIPE_NAME}" >> "${LOCK_OVERRIDE}"
+    else
+        {
+            echo "# This file is generated automatically."
+            echo "# All configuration here overrides anything from recipes or config directory."
+            echo ""
+            printf '[recipes.%s]\nfsrule = "source"\n' "${RECIPE_NAME}"
+        } > "${LOCK_OVERRIDE}"
+    fi
+    log "pinned ${RECIPE_NAME} to source in cookbook.lock"
+}
+
+lock_is_correct() {
+    [ -f "${LOCK_OVERRIDE}" ] || return 1
+    grep -A1 "^\[recipes\.${RECIPE_NAME}\]$" "${LOCK_OVERRIDE}" | grep -q '^fsrule = "source"$'
+}
 
 # --- expected recipe -------------------------------------------------------
 
@@ -189,6 +246,10 @@ if [ "${MODE}" = "verify" ]; then
             rc=2
         fi
     done
+    if ! lock_is_correct; then
+        err "cookbook.lock does not pin ${RECIPE_NAME} to the source rule"
+        rc=2
+    fi
     if [ "${rc}" -eq 0 ]; then
         log "overlay verified (${#PATCH_NAMES[@]} ${ARCH} patch(es))"
     fi
@@ -219,6 +280,8 @@ else
     fi
     log "added ${#PATCH_NAMES[@]} patch(es) to ${RECIPE_REL}"
 fi
+
+write_lock_entry
 
 # The recipe must still be readable by the cookbook, and a patch that does not
 # apply would otherwise surface much later as an opaque build failure.

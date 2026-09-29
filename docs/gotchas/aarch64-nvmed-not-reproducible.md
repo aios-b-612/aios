@@ -73,11 +73,13 @@ Full description, target revision and verification steps:
 - `cargo build --target aarch64-unknown-redox` for `nvmed`: the patched files
   introduce no new warnings (the four `never used` warnings in `queues.rs` are
   pre-existing and identical without the patch).
-- `repo fetch base` applies the patch: the cookbook logs `patching file` for
-  all three files, checks out the pinned revision, and the fetched source
-  contains `poll_mode`, the three fences and the corrected `is_full`.
-- `apply-patches.sh` is idempotent, and `--verify` exits 2 both when the recipe
-  loses its `patches` line and when a patch file drifts from `platform/patches/`.
+- `repo fetch base --repo-binary` applies the patch: the cookbook logs
+  `patching file` for all three files, checks out the pinned revision, and the
+  fetched source contains `poll_mode`, the three fences and the corrected
+  `is_full`.
+- `apply-patches.sh` is idempotent, and `--verify` exits 2 when the recipe
+  loses its `patches` line, when a patch file drifts from `platform/patches/`,
+  or when the `cookbook.lock` source rule is missing.
 - `bootstrap.sh --update` re-applies the overlay after re-checking-out the pin.
 
 ## Integrating the patch was harder than expected
@@ -98,6 +100,27 @@ So the recipe is edited in place instead. The overlay is deterministic and
 verified, and the git pin is untouched, but `redox-os/` is no longer
 byte-identical to upstream, which is the assumption ADR-001 makes. If the pin
 is ever bumped, re-run `apply-patches.sh` and re-check the patch.
+
+## The silent one: a patched recipe still gets bypassed by default
+
+Wiring `patches` into the recipe was not enough. The build defaults to
+`REPO_BINARY=1`, which passes `--repo-binary` to the cookbook, and that makes a
+recipe resolve to a downloaded prebuilt `source.pkgar` rather than its git
+source. The patch is then never applied, because there is no source tree to
+apply it to.
+
+The failure mode is the dangerous kind: `repo fetch base --repo-binary` reports
+`fetch base - successful` either way, and the build completes. Only the image
+is wrong. Confirmed by inspection: before the fix, the fetch left no
+`source/` directory and produced `recipes/core/base/target/<arch>/source.pkgar`.
+
+`apply-patches.sh` therefore also pins the recipe to the `source` rule in
+`cookbook.lock`, which overrides both the recipe default and `--repo-binary`.
+With that in place, the same command clones the pinned revision and logs
+`patching file` for all three files.
+
+The general rule: **adding a patch to a recipe also has to force that recipe
+off the binary path**, or it will be skipped without an error.
 
 ## What is still open
 

@@ -62,22 +62,48 @@ git apply /path/to/nvmed-aarch64-poll-fence.patch
 
 Applied automatically by `platform/scripts/apply-patches.sh`, which
 `build.sh` runs before the upstream build and `bootstrap.sh --verify` checks.
+It does three things:
 
-The script copies the patch next to the recipe it targets and rewrites that
-recipe's `[source]` table to pin the revision and list the patch:
+1. Copies the patch next to the recipe it targets.
+2. Rewrites that recipe's `[source]` table to pin the revision and list the
+   patch:
 
-```toml
-[source]
-git = "https://gitlab.redox-os.org/redox-os/base.git"
-rev = "8fdf4e4bf9a61b240aaf49e23a6541682cf30d6c"
-patches = ["nvmed-aarch64-poll-fence.patch"]
-```
+   ```toml
+   [source]
+   git = "https://gitlab.redox-os.org/redox-os/base.git"
+   rev = "8fdf4e4bf9a61b240aaf49e23a6541682cf30d6c"
+   patches = ["nvmed-aarch64-poll-fence.patch"]
+   ```
 
-That is the cookbook's own supported `patches` mechanism: the patch files are
-resolved relative to the recipe directory, and the cookbook applies them with
-`patch --strip=1` during `repo fetch`. Because `base` is a source (not binary)
-recipe, the patch really is applied rather than bypassed by a prebuilt
-`.pkgar` download.
+   The cookbook applies listed patches with `patch --strip=1` during
+   `repo fetch`.
+
+3. Pins the recipe to the `source` rule in `cookbook.lock`:
+
+   ```toml
+   [recipes.base]
+   fsrule = "source"
+   ```
+
+Step 3 is not optional. The build defaults to `REPO_BINARY=1`, which passes
+`--repo-binary` to the cookbook, and that makes a recipe resolve to a
+downloaded prebuilt `source.pkgar` instead of its git source. A patched recipe
+would then be fetched as a binary and the patch silently skipped, with a
+successful-looking build and an unpatched `nvmed` in the image. This is easy
+to miss: `repo fetch base --repo-binary` reports `fetch base - successful`
+either way.
+
+Verified directly. Before the rule was pinned, `repo fetch base --repo-binary`
+left no `source/` directory and produced
+`recipes/core/base/target/<arch>/source.pkgar`. After, it clones the pinned
+revision and logs `patching file` for all three files.
+
+`cookbook.lock` is only ever written by `repo change-rule*`, never by
+`fetch`/`cook`, so the entry persists across builds. The script rewrites the
+entry itself rather than shelling out to `repo change-rule-local base
+--set-rule=source`, so that a clean tree becomes buildable without a separate
+`repo` invocation, and so that other recipes' entries in the lock are
+preserved.
 
 ### Why the recipe is edited in place
 
@@ -104,14 +130,15 @@ stay intact, the patch content lives in this repository, and the overlay is
 deterministic, idempotent, and verified.
 
 `bootstrap.sh --update` re-checks-out the pinned commit, which discards the
-overlay, so it re-applies it afterwards. `bootstrap.sh --verify` fails (exit 2)
-if the recipe or the patch files have drifted from `platform/patches/`.
+recipe edit, so it re-applies the overlay afterwards. `bootstrap.sh --verify`
+fails (exit 2) if the recipe, a patch file, or the `cookbook.lock` rule has
+drifted from what this script would produce.
 
 ### Verification performed
 
 ```
 $ platform/scripts/apply-patches.sh --verify            # overlay matches
-$ repo fetch base                                       # patching file drivers/executor/src/lib.rs
+$ repo fetch base --repo-binary                        # patching file drivers/executor/src/lib.rs
                                                      # patching file .../nvmed/executor.rs
                                                      # patching file .../nvmed/queues.rs
 $ git -C recipes/core/base/source rev-parse HEAD       # 8fdf4e4b (pin honoured)

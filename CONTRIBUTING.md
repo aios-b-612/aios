@@ -60,9 +60,14 @@ Três pontos que não são negociáveis e que já custaram tempo:
    `repo cook` é código morto nesta versão e não permite sobrepor um recipe.
    O pin em git continua intacto, o overlay é idempotente e
    `bootstrap.sh --verify` falha (exit 2) se ele divergir de
-   `platform/patches/`. Ver `platform/patches/aarch64/README.md` antes de
-   adicionar outro patch: se ele exigir um segundo recipe, o script precisa de
-   um caso novo.
+   `platform/patches/`.
+
+   Duas armadilhas, ambas já mordidas: recipe com patch precisa ser forçada
+   para a regra `source` no `cookbook.lock`, senão `REPO_BINARY=1` baixa um
+   `source.pkgar` e **ignora o patch sem erro**; e `bootstrap.sh --update`
+   descarta o overlay, então o script precisa reaplicar depois. Ver
+   `platform/patches/aarch64/README.md` antes de adicionar outro patch: se ele
+   exigir um segundo recipe, o script precisa de um caso novo.
 
 3. **Não subir artefatos grandes** (`.gguf`, ISO, `*.tokenizer.json`). O
    tokenizer de um modelo é um artefato de modelo, não um arquivo de código; o
