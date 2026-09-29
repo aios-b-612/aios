@@ -136,6 +136,17 @@ else
 fi
 export FILESYSTEM_CONFIG="${CONTAINER_CONFIG}"
 
+# Overlay the platform patches onto the cookbook recipe before the build. The
+# aarch64 image needs the nvmed poll-mode/fence fix; without it the block
+# driver never reaps completions and the image hangs before login:.
+#
+# This runs here rather than inside the container because in podman mode only
+# REDOX_SOURCE is mounted: the script and platform/patches/ are host-side, so
+# the overlay has to be materialised into the mounted tree, which is exactly
+# what apply-patches.sh writes.
+echo "==> platform patches"
+REDOX_ARCH="${ARCH}" "${SCRIPT_DIR}/apply-patches.sh"
+
 echo "==> AIOS build"
 echo "    type:     ${CONFIG_NAME} (${ARCH})"
 echo "    config:   ${FILESYSTEM_CONFIG}"

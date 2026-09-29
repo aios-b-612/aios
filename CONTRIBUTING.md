@@ -47,14 +47,24 @@ modo não interativo trava. Se quiser o TUI, use `AIOS_TUI=1` num terminal real.
 
 ## Contrato com o upstream
 
-Dois pontos que não são negociáveis e que já custaram tempo:
+Três pontos que não são negociáveis e que já custaram tempo:
 
 1. **Não modificar o kernel upstream** (ADR-001). O Redox entra como submódulo/
    clone externo, pinado em `platform/upstream.lock`, e é *trackeado como
    somente-leitura*: um fork nosso seria trabalho invisível para quem só lê o
    repositório. Patch upstream é o canal correto.
 
-2. **Não subir artefatos grandes** (`.gguf`, ISO, `*.tokenizer.json`). O
+2. **Patch local vive em `platform/patches/<arch>/`, versionado aqui.** Uma
+   exceção documentada existe: `scripts/apply-patches.sh` rewrite de um recipe
+   do cookbook dentro de `redox-os/`, porque o flag `--cookbook` do
+   `repo cook` é código morto nesta versão e não permite sobrepor um recipe.
+   O pin em git continua intacto, o overlay é idempotente e
+   `bootstrap.sh --verify` falha (exit 2) se ele divergir de
+   `platform/patches/`. Ver `platform/patches/aarch64/README.md` antes de
+   adicionar outro patch: se ele exigir um segundo recipe, o script precisa de
+   um caso novo.
+
+3. **Não subir artefatos grandes** (`.gguf`, ISO, `*.tokenizer.json`). O
    tokenizer de um modelo é um artefato de modelo, não um arquivo de código; o
    `docs/benchmarks.md` traz os comandos de download.
 

@@ -1,10 +1,13 @@
-# aarch64 nvmed fix was unreproducible — now recovered
+# aarch64 nvmed fix was unreproducible — now recovered and applied
 
-Date: 2026-09-28. Status: **patch recovered, not yet wired into the build**.
+Date: 2026-09-28. Status: **patch recovered, applied by the build, boot not
+re-verified**.
 
 The aarch64 userland boot fix recorded in commit `61d483a` and in ROADMAP.md
 (Phase 1/5) is now recovered as a real patch at
-`platform/patches/aarch64/nvmed-aarch64-poll-fence.patch`.
+`platform/patches/aarch64/nvmed-aarch64-poll-fence.patch`, pinned to
+`base.git` `8fdf4e4b` in `platform/upstream.lock` `[base]`, and applied
+automatically by `platform/scripts/apply-patches.sh`.
 
 ## What the docs claimed
 
@@ -70,32 +73,53 @@ Full description, target revision and verification steps:
 - `cargo build --target aarch64-unknown-redox` for `nvmed`: the patched files
   introduce no new warnings (the four `never used` warnings in `queues.rs` are
   pre-existing and identical without the patch).
+- `repo fetch base` applies the patch: the cookbook logs `patching file` for
+  all three files, checks out the pinned revision, and the fetched source
+  contains `poll_mode`, the three fences and the corrected `is_full`.
+- `apply-patches.sh` is idempotent, and `--verify` exits 2 both when the recipe
+  loses its `patches` line and when a patch file drifts from `platform/patches/`.
+- `bootstrap.sh --update` re-applies the overlay after re-checking-out the pin.
+
+## Integrating the patch was harder than expected
+
+The cookbook advertises `repo cook --cookbook=<dir>` for using a different
+recipes directory, which looked like the clean way to shadow
+`recipes/core/base` without touching the pinned tree. **It is dead code in the
+pinned version.** The recipe index is built by
+`ignore::Walk::new("recipes")` (`redox-os/src/staged_pkg.rs:19`), a path
+relative to the working directory, and `config.cookbook_dir` — which the flag
+sets at `src/bin/repo/main.rs:475` — is never read anywhere in `src/`.
+
+Verified directly rather than inferred: with a deliberately invalid patch file
+in the alternate directory, `repo fetch base --cookbook=<dir>` still reported
+`fetch base - successful` and produced an unpatched source.
+
+So the recipe is edited in place instead. The overlay is deterministic and
+verified, and the git pin is untouched, but `redox-os/` is no longer
+byte-identical to upstream, which is the assumption ADR-001 makes. If the pin
+is ever bumped, re-run `apply-patches.sh` and re-check the patch.
 
 ## What is still open
 
-1. **The patch is not yet applied by the build.** The cookbook supports a
-   `patches` entry in a recipe's `[source]` table, but
-   `recipes/core/base/recipe.toml` is inside the read-only pinned `redox-os/`
-   tree. `repo cook` accepts `--cookbook=<dir>` to shadow recipes, which is the
-   supported route, but it is not implemented.
-2. **`base.git` is fetched unpinned** by the recipe, so the patch is re-checked
-   against a moving `main`. `platform/upstream.lock` pins the `redox` repo and
-   the kernel package but not `base.git`.
-3. **Booting to `login:` on aarch64 with the patch has not been re-verified.** The
-   code compiles and the patch is a faithful recovery of what previously worked,
-   but "it boots" is still an assumption until an image is rebuilt and run.
-4. `docs/gotchas/redox-netstack-abort-boot-blocker.md` is still referenced by
+1. **Booting to `login:` on aarch64 with the patch has not been re-verified.**
+   The patch is applied by the build and compiles, but "it boots" is still an
+   assumption until an image is rebuilt and run. This is the remaining Phase 6
+   gate.
+2. `docs/gotchas/redox-netstack-abort-boot-blocker.md` is still referenced by
    ROADMAP.md and `ai-edge.toml` but does not exist.
-5. CI's aarch64 job is `continue-on-error: true`, so a regression there stays
+3. CI's aarch64 job is `continue-on-error: true`, so a regression there stays
    invisible.
+4. `platform/config/aarch64/ai-edge.toml` still describes the NVMe hang as an
+   open upstream blocker. That text is now stale: the fix exists locally and is
+   applied, and what remains unproven is only the boot.
 
 ## Interim position
 
 - **x86_64 `ai-developer`: validated** (boot → login → real inference).
-- **aarch64 `ai-edge`: buildable, and previously observed booting to login on
-  this host.** The fix is now in-tree as a patch and compiles, but it is not yet
-  applied by the automated build, so a clean-checkout build does not yet
-  reproduce the boot.
+- **aarch64 `ai-edge: buildable, and previously observed booting to login on
+  this host.** The fix is in-tree, pinned, and applied by the build, but the
+  boot has not been re-verified since recovery, so treat a clean-checkout boot
+  as unproven rather than as working.
 
 `platform/scripts/release.sh` records the kernel `source_identifier` of every
 artifact precisely so this cannot be silently forgotten again.

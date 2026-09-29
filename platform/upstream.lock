@@ -13,10 +13,27 @@ subject = "Merge branch 'all-pkg-2' into 'master'"
 # The kernel is NOT part of the redox repo: recipes/core/kernel/recipe.toml
 # fetches a prebuilt package from the Redox repository, and that is what
 # ships in the image. Bumping the commit above does NOT bump the kernel.
+#
+# The aarch64 boot fix is NOT a kernel change. The kernel package below is
+# stock. The fix is in the block driver, which lives in base.git below.
 [kernel]
 repo = "https://gitlab.redox-os.org/redox-os/kernel.git"
-# Resolved package that built the validated images. A locally patched kernel
-# (see docs/gotchas/aarch64-nvmed-not-reproducible.md) is NOT reproducible
-# from this pin: there is no patch in this tree.
+# Resolved package that built the validated images. This is the stock Redox
+# kernel package, unmodified. See [base] for the driver patch that the aarch64
+# image needs, and docs/gotchas/aarch64-nvmed-not-reproducible.md.
 package_source_identifier = "bbb5d49f0e81dded9ff73829ee56f96c83092263"
 package_time_identifier = "2026-09-24T07:59:23Z"
+
+# recipes/core/base/recipe.toml fetches base.git, which vendors the Redox user
+# space including drivers/. The recipe ships with no `rev`, so it tracks a moving
+# main; this pin plus the patches listed in platform/patches/aarch64/ make the
+# aarch64 image reproducible.
+#
+# base.git is the target of nvmed-aarch64-poll-fence.patch, which was written
+# against this revision. Re-check the patch with `git apply --check` if this is
+# ever bumped.
+[base]
+repo = "https://gitlab.redox-os.org/redox-os/base.git"
+rev = "8fdf4e4bf9a61b240aaf49e23a6541682cf30d6c"
+date = "2026-09-24"
+subject = "pcid: show device type for all known classes"

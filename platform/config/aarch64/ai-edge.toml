@@ -3,16 +3,21 @@
 # Phase 1 scope: bootable minimal image without a desktop, booting to
 # a network-enabled shell. Edge AI service + web panel arrive in Phase 5.
 #
-# KNOWN BLOCKER (aarch64 runtime): the image builds and the kernel boots, but
-# the kernel never reaches the login prompt. The NVMe driver hangs at
-# namespace enumeration and the IRQ is never delivered. Enabling
-# `gic-version=3,its=on,iommu=smmuv3` does NOT fix it: a boot canary run with
-# those settings (900s, TCG) reached the bootloader, EL1 and kernel_entry, then
-# stalled before `login:`. This is upstream Redox, not an AIOS defect.
+# KNOWN BLOCKER (aarch64 runtime): the image builds, but whether the kernel
+# reaches the login prompt is UNVERIFIED since the nvmed fix was recovered.
+#
+# The NVMe driver used to hang at namespace enumeration because the interrupt
+# was never delivered on aarch64 QEMU `virt`. That is fixed locally by
+# platform/patches/aarch64/nvmed-aarch64-poll-fence.patch (executor poll mode
+# plus DMA fences on the queue doorbells), which this profile's build now
+# applies. The image is therefore expected to boot; it has not been re-run
+# since. Enabling `gic-version=3,its=on,iommu=smmuv3` does NOT help on its own:
+# a boot canary with those settings (900s, TCG) reached the bootloader, EL1 and
+# kernel_entry, then stalled before `login:`.
 #
 # Because the netstack daemon starts as part of initfs userspace, the login
 # milestone is also the first point where the `tcp:` scheme is reachable, so
-# in-guest TCP cannot be exercised on this target at all.
+# in-guest TCP cannot be exercised on this target until then.
 #
 # The x86_64 ai-developer profile is the currently validated runtime target.
 # See docs/gotchas/aarch64-nvmed-not-reproducible.md and ROADMAP.md Phase 5.

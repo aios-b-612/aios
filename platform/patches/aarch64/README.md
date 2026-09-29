@@ -10,9 +10,9 @@ here so the deviation is visible and reviewable.
 |---|---|
 | Target repo | `https://gitlab.redox-os.org/redox-os/base.git` |
 | Target path | `drivers/executor/`, `drivers/storage/nvmed/` |
-| Verified against | `8fdf4e4bf9a61b240aaf49e23a6541682cf30d6c` (`main`, 2026-09-24) |
+| Pinned revision | `8fdf4e4bf9a61b240aaf49e23a6541682cf30d6c` (`main`, 2026-09-24), recorded in `platform/upstream.lock` `[base]` |
 | Size | 3 files, +119 / -5 |
-| Status | applies cleanly; compiles for `aarch64-unknown-redox` with no new warnings |
+| Status | applied by the build; compiles for `aarch64-unknown-redox` with no new warnings |
 
 ### Why the fix is needed
 
@@ -58,33 +58,66 @@ cd base
 git apply /path/to/nvmed-aarch64-poll-fence.patch
 ```
 
-### Integration status
+### Integration
 
-**Not yet wired into the automated build.** The cookbook's supported mechanism
-is a `patches` entry in the recipe's `[source]` table:
+Applied automatically by `platform/scripts/apply-patches.sh`, which
+`build.sh` runs before the upstream build and `bootstrap.sh --verify` checks.
+
+The script copies the patch next to the recipe it targets and rewrites that
+recipe's `[source]` table to pin the revision and list the patch:
 
 ```toml
 [source]
 git = "https://gitlab.redox-os.org/redox-os/base.git"
+rev = "8fdf4e4bf9a61b240aaf49e23a6541682cf30d6c"
 patches = ["nvmed-aarch64-poll-fence.patch"]
 ```
 
-but `recipes/core/base/recipe.toml` lives inside the read-only pinned
-`redox-os/` tree, so this cannot be edited in place. `repo cook` accepts
-`--cookbook=<dir>` to point at a different recipes directory, which is the
-supported way to shadow recipes. The `base.git` revision is currently fetched
-**unpinned** by the recipe, so the patch is re-checked against `main` at build
-time until that is addressed.
+That is the cookbook's own supported `patches` mechanism: the patch files are
+resolved relative to the recipe directory, and the cookbook applies them with
+`patch --strip=1` during `repo fetch`. Because `base` is a source (not binary)
+recipe, the patch really is applied rather than bypassed by a prebuilt
+`.pkgar` download.
 
-Because `base.git` is unpinned, re-verify with `git apply --check` whenever the
-upstream `main` moves.
+### Why the recipe is edited in place
+
+The cookbook advertises a `--cookbook=<dir>` flag for pointing at a different
+recipes directory, but it is dead code in the pinned version. The recipe index
+is built by
+
+```rust
+// redox-os/src/staged_pkg.rs
+static RECIPE_PATHS: LazyLock<HashMap<PackageName, PathBuf>> = LazyLock::new(|| {
+    for entry_res in ignore::Walk::new("recipes") {   // relative to CWD
+```
+
+and `config.cookbook_dir`, which the flag sets, is never read anywhere else in
+`src/`. Passing a directory is silently ignored, so a recipe cannot be shadowed
+that way. Verified directly: with an invalid patch file in the alternate
+directory, `repo fetch base --cookbook=<dir>` still reported success and
+fetched an unpatched source.
+
+Editing the recipe in place is therefore the only mechanism the cookbook
+honours. The trade-off is that `redox-os/` is no longer byte-identical to
+upstream, which ADR-001 assumes. What is preserved: the git pin and its history
+stay intact, the patch content lives in this repository, and the overlay is
+deterministic, idempotent, and verified.
+
+`bootstrap.sh --update` re-checks-out the pinned commit, which discards the
+overlay, so it re-applies it afterwards. `bootstrap.sh --verify` fails (exit 2)
+if the recipe or the patch files have drifted from `platform/patches/`.
 
 ### Verification performed
 
 ```
-$ git apply --check nvmed-aarch64-poll-fence.patch   # clean
-$ cargo build --target aarch64-unknown-redox         # executor: Finished
-$ cargo build --target aarch64-unknown-redox         # nvmed: 0 warnings in patched files
+$ platform/scripts/apply-patches.sh --verify            # overlay matches
+$ repo fetch base                                       # patching file drivers/executor/src/lib.rs
+                                                     # patching file .../nvmed/executor.rs
+                                                     # patching file .../nvmed/queues.rs
+$ git -C recipes/core/base/source rev-parse HEAD       # 8fdf4e4b (pin honoured)
+$ grep -c poll_mode <source>/drivers/executor/src/lib.rs   # 6
+$ grep 'fence(Ordering' <source>/.../queues.rs          # Acquire + 2x Release
+$ cargo build --target aarch64-unknown-redox            # executor: Finished
 ```
 
 The final link of `nvmed` under a bare `cargo build` fails on an unresolved

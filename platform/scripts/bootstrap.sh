@@ -7,14 +7,22 @@
 # upstream.lock, so `make build` is reproducible on any host and in CI.
 #
 # Usage:
-#   bootstrap.sh            clone if missing, verify revision if present
+#   bootstrap.sh            clone if missing, verify revision if present, then
+#                           apply the platform patch overlay
 #   bootstrap.sh --verify   only check that the existing tree matches the pin
-#   bootstrap.sh --update   move to the revision in upstream.lock
+#                           and carries the overlay
+#   bootstrap.sh --update   move to the revision in upstream.lock and re-apply
+#                           the overlay
 #                           (re-checkout only; does not merge or pull newer
 #                           commits — bump upstream.lock deliberately instead)
 #
 # Environment:
 #   REDOX_SOURCE  where the upstream tree lives (default <platform>/../redox-os)
+#   REDOX_ARCH    aarch64 or x86_64; selects which platform/patches/ overlay is
+#                 applied (default: derived from uname -m)
+#
+# Note: the overlay edits one cookbook recipe inside redox-os/, so the tree is
+# not byte-identical to upstream by design. See platform/patches/aarch64/README.md.
 #
 # Exit codes: 0 ok, 1 error, 2 pin mismatch with --verify/--update
 
@@ -95,6 +103,10 @@ case "${MODE}" in
             exit 1
         fi
         verify || exit $?
+        # The tree is not expected to be byte-identical to upstream: the platform
+        # patch overlay deliberately edits one cookbook recipe. What must hold is
+        # that the overlay still matches platform/patches/.
+        REDOX_ARCH="${REDOX_ARCH:-$(uname -m)}" "${SCRIPT_DIR}/apply-patches.sh" --verify || exit $?
         ;;
     update)
         if [ ! -d "${REDOX_SOURCE}/.git" ]; then
@@ -106,6 +118,9 @@ case "${MODE}" in
         log "checking out ${UPSTREAM_COMMIT}"
         git -C "${REDOX_SOURCE}" checkout --quiet "${UPSTREAM_COMMIT}"
         verify || exit $?
+        # A checkout discards the platform patch overlay, so put it back.
+        log "re-applying platform patches"
+        REDOX_ARCH="${REDOX_ARCH:-$(uname -m)}" "${SCRIPT_DIR}/apply-patches.sh" || exit $?
         ;;
     ensure)
         if [ -d "${REDOX_SOURCE}/.git" ]; then
@@ -133,6 +148,9 @@ case "${MODE}" in
             git -C "${REDOX_SOURCE}" checkout --quiet "${UPSTREAM_COMMIT}"
             verify || exit $?
         fi
+        # Leave the tree in a buildable state: the overlay edits a cookbook
+        # recipe, so a fresh clone does not have it yet.
+        REDOX_ARCH="${REDOX_ARCH:-$(uname -m)}" "${SCRIPT_DIR}/apply-patches.sh" || exit $?
         ;;
 esac
 
