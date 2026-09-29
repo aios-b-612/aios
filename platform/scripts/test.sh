@@ -95,16 +95,21 @@ fi
 # or IDE drive produced a silent hang with no console output at all, because
 # the El Torito bootloader is only wired into the emulated CD-ROM. Upstream
 # mounts the live image the same way (mk/qemu.mk: -boot d -cdrom $(DISK)).
+#
+# Only the ISO is redirected. The disk path keeps the per-arch arguments
+# verbatim, so switching an image to an ISO cannot silently change how the
+# harddrive is attached.
 MEDIA="disk"
 case "${IMG}" in
     *.iso) MEDIA="cdrom" ;;
 esac
 
+# Usage: media_args <default disk args for this arch>
 media_args() {
     if [ "${MEDIA}" = "cdrom" ]; then
         echo "-drive file=${IMG},format=raw,media=cdrom,readonly=on -boot d"
     else
-        echo "-drive file=${IMG},format=raw"
+        echo "$1"
     fi
 }
 
@@ -115,7 +120,7 @@ case "${ARCH}" in
         CPU="core2duo"
         SMP=4
         MEM=2048
-        DISK_ARGS="$(media_args)"
+        DISK_ARGS="$(media_args "-drive file=${IMG},format=raw,if=none,id=drv0 -device nvme,drive=drv0,serial=NVME_SERIAL")"
         NET_ARGS="-device e1000,netdev=net0 -netdev user,id=net0"
         if [ "${MEDIA}" = "cdrom" ]; then
             # The live ISO is UEFI-only (El Torito with no BIOS boot entry), so
@@ -141,7 +146,7 @@ case "${ARCH}" in
         CPU="max"
         SMP=1
         MEM=2048
-        DISK_ARGS="$(media_args)"
+        DISK_ARGS="$(media_args "-drive file=${IMG},format=raw,if=none,id=drv0 -device nvme,drive=drv0,serial=NVME_SERIAL")"
         NET_ARGS="-device e1000,netdev=net0 -netdev user,id=net0"
         # UEFI firmware required to boot aarch64 (no SeaBIOS on this machine).
         # Prefer the edk2 firmware shipped with qemu-efi-aarch64.
@@ -159,7 +164,7 @@ case "${ARCH}" in
         CPU="pentium2"
         SMP=1
         MEM=1024
-        DISK_ARGS="$(media_args)"
+        DISK_ARGS="$(media_args "-drive file=${IMG},format=raw")"
         NET_ARGS="-device e1000,netdev=net0 -netdev user,id=net0"
         ;;
     *)
