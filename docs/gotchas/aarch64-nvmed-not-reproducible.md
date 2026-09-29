@@ -142,6 +142,19 @@ us> uname -a
 Redox redox 0.5.12 b68957d4a3e1590c4f5b8d5608d94b3e45bd3b45 aarch64 Redox
 ```
 
+The headless boot test reaches every milestone, including the guest-side
+identity check that reads `/etc/ai-platform` over a serial login:
+
+```
+  [OK]   Redox OS Bootloader
+  [OK]   Currently in EL1
+  [OK]   kernel_entry
+  [OK]   login:
+  [OK]   models
+  [OK]   aios-edge-os
+RESULT: PASS
+```
+
 Getting there needed two host-level fixes that are easy to mistake for patch
 problems, so both are recorded here.
 
@@ -165,21 +178,50 @@ CMake Error: CMake was unable to find a build program corresponding to "Ninja".
 `platform/scripts/host-deps.sh` now installs it (apt package `ninja-build`, or
 `pipx install ninja` when sudo needs a password).
 
+## A stale canary can hide a fix
+
+While the NVMe hang was open, `test.sh` reported `login:` and everything after
+it as `[BLOCKED]` on aarch64 and exited 2, on the theory that userspace could
+not start. That is a real trap: the canary stayed green while a milestone that
+had started passing went unreported, and the text pointed at the NVMe hang long
+after the hang was fixed.
+
+`login:` is now a hard milestone on aarch64 like on x86_64, and a miss is a
+plain FAIL. Exit 2 is reserved for "the test could not run" (no QEMU, no UEFI
+firmware), which is a broken environment rather than a broken image.
+
+## The edge image shipped without coreutils
+
+Fixing the NVMe hang exposed a second, independent gap. `ai-edge.toml` had no
+`[packages]` section, and the upstream `server.toml` it includes does not list
+`coreutils`, so the image had no basic userspace tools. The boot test could
+log in and list `/var/lib/ai`, but could not read `/etc/ai-platform`:
+
+```
+[ld.so]: failed to link '/usr/bin/cat': NotFound
+```
+
+That is not only a harness problem: someone inspecting a device over serial
+has no `cat` either. `coreutils` is now in the profile's package list, and
+`cat /etc/ai-platform` returns the file contents in-guest.
+
+A milestone can also pass for the wrong reason, which is worth checking when
+one is added: `models` first matched because `ls /var/lib/ai` printed a
+directory named `models`, not because any model loaded.
+
 ## What is still open
 
 1. `docs/gotchas/redox-netstack-abort-boot-blocker.md` is still referenced by
    ROADMAP.md and `ai-edge.toml` but does not exist.
-2. CI's aarch64 job is `continue-on-error: true`, so a regression there stays
-   invisible. Now that the boot is known to work, this can be tightened.
-3. `platform/config/aarch64/ai-edge.toml` still describes the NVMe hang as an
-   open upstream blocker. That text is now stale: the fix is in-tree, applied
-   by the build, and the boot is verified.
+2. `edge status` / `edge models` in-guest still need a working netstack for TCP
+   round-trips, which is the open item above.
 
 ## Interim position
 
 - **x86_64 `ai-developer`: validated** (boot → login → real inference).
-- **aarch64 `ai-edge: validated** (boot → login → interactive shell) **with the
-  patch applied in-tree**, on QEMU `virt` with an emulated NVMe device.
+- **aarch64 `ai-edge`: validated** (boot → login → interactive shell, and the
+  headless canary passes every milestone) with the patch applied in-tree, on
+  QEMU `virt` with an emulated NVMe device.
 
 Neither of these says anything about physical Raspberry Pi hardware, which has
 its own open problems: the SDHCI driver only matches `brcm,bcm2835-sdhci`, so

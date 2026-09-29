@@ -11,11 +11,16 @@
 #   --gic-v3     enable GICv3/ITS on QEMU virt machine (aarch64 only)
 #
 # Exit codes:
-#   0  PASS     all milestones for the arch were reached
-#   1  FAIL     a milestone the image is expected to reach was missed
-#   2  BLOCKED  (aarch64 only) the kernel booted, but userspace never started
-#               because of the upstream NVMe hang. Distinct from FAIL on
-#               purpose: 2 means "blocked outside this repo", 1 means "broken".
+#   0  PASS   every milestone for the arch was reached
+#   1  FAIL   a milestone the image is expected to reach was missed
+#   2  ERROR  the test could not run: QEMU or the UEFI firmware is missing, or
+#             the arch has no default QEMU args. That is a broken environment,
+#             not a broken image, so it stays distinct from 1.
+#
+# aarch64 used to report 2 for "kernel booted but userspace never started"
+# because of the upstream NVMe hang. That is fixed in-tree now
+# (platform/patches/aarch64/nvmed-aarch64-poll-fence.patch) and aarch64 boots
+# to a shell, so `login:` is a hard milestone and a miss is a plain FAIL.
 #
 # Environment:
 #   REDOX_SOURCE  upstream redox tree (default <platform>/../redox-os)
@@ -277,7 +282,6 @@ check_milestone() {
 }
 
 ok=1
-blocked=0
 if [ "${ARCH}" = "aarch64" ]; then
     # Hard requirement on aarch64: the kernel must boot. These are the
     # milestones the image can actually reach today.
@@ -285,30 +289,25 @@ if [ "${ARCH}" = "aarch64" ]; then
     check_milestone "Currently in EL1" || ok=0
     check_milestone "kernel_entry" || ok=0
 
-    # The login prompt and everything after it are upstream-blocked: the NVMe
-    # driver hangs at namespace enumeration and the IRQ is never delivered, so
-    # userspace never starts. `--gic-v3` does not change this — verified with a
-    # 900s canary run (gic-version=3, its=on, iommu=smmuv3, TCG), which stalled
-    # after kernel_entry every time.
+    # The NVMe driver used to hang at namespace enumeration on aarch64 QEMU
+    # `virt`, so userspace never started past kernel_entry. That is fixed by
+    # platform/patches/aarch64/nvmed-aarch64-poll-fence.patch, and the profile
+    # now boots to a login prompt and an interactive shell, so `login:` is a
+    # hard requirement here exactly as on x86_64. A miss means the patch was
+    # not applied, the binary path bypassed it, or the image is stale.
     #
-    # These are reported as BLOCKED rather than FAIL, because a FAIL here would
-    # mean "this image is broken" and would make the canary permanently red for
-    # a defect we do not control. The kernel milestones above stay hard failures
-    # so genuine regressions are still caught.
-    for milestone in "login:" "models" "${VARIANT_MARKER}"; do
+    # `models` and the variant marker are read from inside the guest after
+    # logging in, so they need enough time to boot plus accept the login.
+    # LOGIN_DELAY covers that; raise it with the env var on a slow runner.
+    check_milestone "login:" || ok=0
+    for milestone in "models" "${VARIANT_MARKER}"; do
         if grep -qF "$milestone" "${OUT}"; then
             echo "  [OK]   ${milestone}"
         else
-            echo "  [BLOCKED] ${milestone}"
-            blocked=1
+            echo "  [MISS] ${milestone}"
+            ok=0
         fi
     done
-    if [ "${blocked}" -eq 1 ]; then
-        echo "  [WARN] aarch64 userland not reached: upstream Redox NVMe hangs at"
-        echo "         namespace enumeration under QEMU; GICv3/ITS+SMMUv3 does not"
-        echo "         help. See docs/gotchas/aarch64-nvmed-not-reproducible.md"
-        echo "         and ROADMAP.md Phase 5."
-    fi
 else
     check_milestone "login:" || ok=0
     check_milestone "models" || ok=0
@@ -318,13 +317,6 @@ fi
 if [ "${ok}" -eq 0 ]; then
     echo "RESULT: FAIL (boot milestones not all reached)" >&2
     exit 1
-fi
-
-if [ "${blocked}" -eq 1 ]; then
-    # Kernel booted, userspace blocked upstream. Not a pass: report it as such
-    # so nobody reads a green exit code as "aarch64 boots".
-    echo "RESULT: BLOCKED (kernel booted; userspace blocked upstream)" >&2
-    exit 2
 fi
 
 echo "RESULT: PASS"

@@ -35,6 +35,16 @@ filesystem_size = 2048
 # Do not prompt if settings are not defined
 prompt = false
 
+[packages]
+# The upstream server.toml include does NOT bring in coreutils, and this
+# profile adds no [packages] of its own, so the image shipped with no basic
+# userspace tools. That is not merely a test-harness problem: the boot canary
+# cannot read /etc/ai-platform without `cat`, and neither can a human
+# inspecting a device over serial. Verified before adding: a login succeeded
+# and `ls /var/lib/ai` worked, while `cat /etc/ai-platform` failed with
+# "[ld.so]: failed to link '/usr/bin/cat': NotFound".
+coreutils = {}
+
 # AI Platform groundwork: model cache location (ADR-008)
 [[files]]
 path = "/var/lib/ai"

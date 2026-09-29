@@ -130,7 +130,8 @@ no runner sem display, que é a configuração que de fato importa.
 
 **Blocker (plataforma Redox, não aios)**: `netstack` (userspace netstack do Redox, iniciado pelo init, PID 40) **aborta no boot** sob este qemu: `UNHANDLED EXCEPTION ... /usr/bin/netstack` → `[ERROR netstack@src/header/stdlib/mod.rs:121] Abort`. Como o Redox atende o scheme `tcp:` **inteiramente via userspace netstack**, qualquer connect TCP in-guest (loopback **e** eth0 10.0.2.15) depende dele — logo `edge status`/`edge models` in-guest travam por causa do netstack, **não** do daemon. O bind-first do daemon (0.0.0.0→127.0.0.1) já está validado; resta validar o round-trip TCP completo quando o netstack parar de abortar (upstream Redox / config qemu). Detalhes: `gotchas/redox-netstack-abort-boot-blocker.md`.
 
-**Atenção (blocker upstream)**: fix do `nvmed` aplicado em 2026‑09‑25 (fences DMA + modo polling). A userland aarch64 agora boot até login; pendentes são o netstack e a validação TCP in‑guest. O `ai-edge` é validado em x86_64 (perfil sem GUI); o aarch64 permanece como alvo de deploy futuro.
+**Status (2026‑09‑29)**: o `ai-edge` aarch64 está **validado** — build completo, boot até `login:`, shell interativo e canário headless com todos os milestones em PASS. O fix do `nvmed` (fences DMA + modo polling) está in-tree e aplicado pelo build; ver `gotchas/aarch64-nvmed-not-reproducible.md`. Pendente permanece só o netstack e a validação TCP in‑guest. O alvo de runtime
+validado em x86_64 continua sendo o perfil `ai-developer` (perfil sem GUI); o aarch64 permanece como alvo de deploy futuro.
 
 ---
 

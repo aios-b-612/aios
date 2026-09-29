@@ -162,33 +162,18 @@ jobs:
       - name: Build aarch64 ai-edge image
         run: ./platform/scripts/build.sh -a aarch64 -c ai-edge -n
 
-      # test.sh exits 2 (BLOCKED) when the kernel boots but userspace never
-      # starts — the upstream Redox NVMe hang, which this job cannot fix. That
-      # is recorded as neutral rather than a failure, so the job stays meaningful
-      # for the milestones that *are* reachable: bootloader, EL1, kernel_entry.
-      # Every other exit code is a real regression and must fail the job, so it
-      # is propagated rather than swallowed.
+      # aarch64 boots to a login prompt and an interactive shell, so
+      # `login:` and the guest-side identity marker are hard requirements and a
+      # miss is a real regression. Exit 2 means the test could not run at all
+      # (no QEMU binary, no UEFI firmware), which is a broken environment and
+      # must not be reported as a booting image either.
+      #
+      # LOGIN_DELAY has to cover boot plus the serial login, and TCG on a
+      # runner is slower than a workstation; --gic-v3 adds more. The default in
+      # test.sh is 120s, which left the login commands racing the prompt here.
       - name: Run aarch64 boot test (with GICv3/ITS)
-        id: boot
         run: |
-          set +e
-          ./platform/scripts/test.sh -a aarch64 -c ai-edge --gic-v3 -t 600
-          code=$?
-          set -e
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          case "$code" in
-            0)
-              echo "aarch64 fully booted."
-              ;;
-            2)
-              echo "::notice::aarch64 kernel booted; userspace blocked by the upstream Redox NVMe hang. Milestones after kernel_entry were not reached."
-              echo "See docs/gotchas/aarch64-nvmed-not-reproducible.md."
-              ;;
-            *)
-              echo "aarch64 boot canary failed (exit ${code})."
-              exit "$code"
-              ;;
-          esac
+          LOGIN_DELAY=200 ./platform/scripts/test.sh -a aarch64 -c ai-edge --gic-v3 -t 600
 
       - name: Upload aarch64 boot log
         if: always()
