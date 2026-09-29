@@ -122,27 +122,68 @@ With that in place, the same command clones the pinned revision and logs
 The general rule: **adding a patch to a recipe also has to force that recipe
 off the binary path**, or it will be skipped without an error.
 
+## Resolved: booting to `login:` on aarch64
+
+A full image built with the patch boots to an interactive shell on QEMU
+`virt` with the image on an emulated NVMe device. This closes the Phase 6
+gate.
+
+```
+BdsDxe: starting Boot0001 "UEFI QEMU NVMe Ctrl NVME_SERIAL 1"
+Redox OS Bootloader 1.0.0 on aarch64/UEFI
+Looking for RedoxFS:
+RedoxFS 5136f408-2c55-42fe-b3a2-518ccb28b902: 2045 MiB
+
+redox login: user
+Welcome to Redox OS!
+us> id
+uid=1000(user) gid=1000(user)
+us> uname -a
+Redox redox 0.5.12 b68957d4a3e1590c4f5b8d5608d94b3e45bd3b45 aarch64 Redox
+```
+
+Getting there needed two host-level fixes that are easy to mistake for patch
+problems, so both are recorded here.
+
+**The image can silently be stale.** `$(BUILD)/harddrive.img` depends on
+`$(REPO_TAG)`, and `cook` only reaches its `touch $(REPO_TAG)` when the cook
+succeeds. After a failure the stamp is left older than the image, so make
+considers the image up to date and a later "successful" build reuses it
+without rebuilding. The `image` target exists for this: it removes only the
+image and reruns, keeping the software cache. Check the image mtime against
+`recipes/core/base/target/*/build/*/release/nvmed` before trusting a boot
+result.
+
+**`ninja` is not in the host dependency check.** `mk/depends.mk` checks rustup,
+cbindgen, nasm and just, but the CMake-based cookbook recipes also need ninja,
+and they fail with an opaque
+
+```
+CMake Error: CMake was unable to find a build program corresponding to "Ninja".
+```
+
+`platform/scripts/host-deps.sh` now installs it (apt package `ninja-build`, or
+`pipx install ninja` when sudo needs a password).
+
 ## What is still open
 
-1. **Booting to `login:` on aarch64 with the patch has not been re-verified.**
-   The patch is applied by the build and compiles, but "it boots" is still an
-   assumption until an image is rebuilt and run. This is the remaining Phase 6
-   gate.
-2. `docs/gotchas/redox-netstack-abort-boot-blocker.md` is still referenced by
+1. `docs/gotchas/redox-netstack-abort-boot-blocker.md` is still referenced by
    ROADMAP.md and `ai-edge.toml` but does not exist.
-3. CI's aarch64 job is `continue-on-error: true`, so a regression there stays
-   invisible.
-4. `platform/config/aarch64/ai-edge.toml` still describes the NVMe hang as an
-   open upstream blocker. That text is now stale: the fix exists locally and is
-   applied, and what remains unproven is only the boot.
+2. CI's aarch64 job is `continue-on-error: true`, so a regression there stays
+   invisible. Now that the boot is known to work, this can be tightened.
+3. `platform/config/aarch64/ai-edge.toml` still describes the NVMe hang as an
+   open upstream blocker. That text is now stale: the fix is in-tree, applied
+   by the build, and the boot is verified.
 
 ## Interim position
 
 - **x86_64 `ai-developer`: validated** (boot → login → real inference).
-- **aarch64 `ai-edge: buildable, and previously observed booting to login on
-  this host.** The fix is in-tree, pinned, and applied by the build, but the
-  boot has not been re-verified since recovery, so treat a clean-checkout boot
-  as unproven rather than as working.
+- **aarch64 `ai-edge: validated** (boot → login → interactive shell) **with the
+  patch applied in-tree**, on QEMU `virt` with an emulated NVMe device.
+
+Neither of these says anything about physical Raspberry Pi hardware, which has
+its own open problems: the SDHCI driver only matches `brcm,bcm2835-sdhci`, so
+BCM2711 (Pi 4) is unsupported, and Pi 5 needs separate RP1/PCIe work.
 
 `platform/scripts/release.sh` records the kernel `source_identifier` of every
 artifact precisely so this cannot be silently forgotten again.

@@ -141,7 +141,6 @@ $ platform/scripts/apply-patches.sh --verify            # overlay matches
 $ repo fetch base --repo-binary                        # patching file drivers/executor/src/lib.rs
                                                      # patching file .../nvmed/executor.rs
                                                      # patching file .../nvmed/queues.rs
-$ git -C recipes/core/base/source rev-parse HEAD       # 8fdf4e4b (pin honoured)
 $ grep -c poll_mode <source>/drivers/executor/src/lib.rs   # 6
 $ grep 'fence(Ordering' <source>/.../queues.rs          # Acquire + 2x Release
 $ cargo build --target aarch64-unknown-redox            # executor: Finished
@@ -151,7 +150,36 @@ The final link of `nvmed` under a bare `cargo build` fails on an unresolved
 `futex` symbol inside the upstream `redox_rings` crate, because Redox userland
 binaries are linked by the `base` makefile with its own link recipe rather than
 by cargo's default. That is unrelated to this patch and does not occur in a
-real image build.
+real image build, where `nvmed` links and produces warnings only.
 
-Booting to `login:` on `aarch64` QEMU with the patch applied is **not yet
-verified**; see `docs/gotchas/aarch64-nvmed-not-reproducible.md`.
+### Boot verified
+
+A full `aarch64` image built with this patch boots to an interactive shell:
+
+```
+$ build.sh -a aarch64 -c ai-edge -n
+...
+mv build/aarch64/ai-edge/harddrive.img.partial build/aarch64/ai-edge/harddrive.img
+
+# UEFI boots the image off the NVMe device and finds the filesystem:
+BdsDxe: starting Boot0001 "UEFI QEMU NVMe Ctrl NVME_SERIAL 1"
+Redox OS Bootloader 1.0.0 on aarch64/UEFI
+Looking for RedoxFS:
+RedoxFS 5136f408-2c55-42fe-b3a2-518ccb28b902: 2045 MiB
+
+redox login: user
+Welcome to Redox OS!
+ion: creating history file at "/home/user/.local/share/ion/history"
+
+us> id
+uid=1000(user) gid=1000(user)
+us> uname -a
+Redox redox 0.5.12 b68957d4a3e1590c4f5b8d5608d94b3e45bd3b45 aarch64 Redox
+```
+
+Without the patch the image hangs before `login:`, because the block driver
+never reaps completions. Root cause is recorded in
+`docs/gotchas/aarch64-nvmed-not-reproducible.md`.
+
+QEMU here is `qemu-system-aarch64` on machine `virt` with the image on an
+emulated NVMe device, which is the configuration this patch targets.
