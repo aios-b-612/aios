@@ -99,7 +99,11 @@ pub fn serve(addr: &str, handler: &'static Handler) -> std::io::Result<()> {
 /// Parse the response status line ("HTTP/1.1 200 OK") into the code.
 fn status_code(line: &str) -> u16 {
     let mut parts = line.split_whitespace();
-    if parts.next().map(|s| s.starts_with("HTTP/")).unwrap_or(false) {
+    if parts
+        .next()
+        .map(|s| s.starts_with("HTTP/"))
+        .unwrap_or(false)
+    {
         if let Some(code) = parts.next() {
             if let Ok(c) = code.parse() {
                 return c;
@@ -156,6 +160,28 @@ fn header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
+/// True when the buffer holds the status line, headers and the full body
+/// advertised by `Content-Length`. Without that header the caller keeps
+/// reading until the peer closes.
+fn response_ready(buf: &[u8]) -> bool {
+    let Some(pos) = header_end(buf) else {
+        return false;
+    };
+    let head = String::from_utf8_lossy(&buf[..pos]);
+    let mut content_length: Option<usize> = None;
+    for line in head.lines().skip(1) {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("content-length") {
+                content_length = v.trim().parse().ok();
+            }
+        }
+    }
+    match content_length {
+        Some(len) => buf.len() >= pos + 4 + len,
+        None => false,
+    }
+}
+
 fn handle_connection(stream: &mut TcpStream, handler: &Handler) -> std::io::Result<()> {
     // Read incrementally until the header block is complete.
     let mut buf: Vec<u8> = Vec::new();
@@ -209,7 +235,10 @@ fn parse_request(head: &str, tail: Vec<u8>) -> std::io::Result<ParsedRequest> {
     let method = parts.next().unwrap_or_default().to_string();
     let target = parts.next().unwrap_or_default();
     if method.is_empty() || target.is_empty() {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad request line"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "bad request line",
+        ));
     }
     let (path, query) = match target.split_once('?') {
         Some((p, q)) => (p.to_string(), parse_query(q)),
@@ -240,7 +269,12 @@ fn parse_request(head: &str, tail: Vec<u8>) -> std::io::Result<ParsedRequest> {
 fn write_response(stream: &mut TcpStream, resp: &Response) -> std::io::Result<()> {
     let mut out = Vec::new();
     out.extend_from_slice(
-        format!("HTTP/1.1 {} {}\r\n", resp.status, reason_phrase(resp.status)).as_bytes(),
+        format!(
+            "HTTP/1.1 {} {}\r\n",
+            resp.status,
+            reason_phrase(resp.status)
+        )
+        .as_bytes(),
     );
     out.extend_from_slice(format!("Content-Type: {}\r\n", resp.content_type).as_bytes());
     out.extend_from_slice(format!("Content-Length: {}\r\n", resp.body.len()).as_bytes());
@@ -248,6 +282,9 @@ fn write_response(stream: &mut TcpStream, resp: &Response) -> std::io::Result<()
     out.extend_from_slice(&resp.body);
     stream.write_all(&out)?;
     stream.flush()?;
+    // The Redox netstack does not turn a dropped fd into a TCP FIN in time for
+    // the peer. Shutdown the write half so the client read reaches EOF.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
     Ok(())
 }
 
@@ -278,7 +315,12 @@ impl Client {
     }
 
     /// Perform a request; returns `(status, body)`.
-    pub fn request(&self, method: &str, path: &str, body: Option<&[u8]>) -> Result<(u16, Vec<u8>), String> {
+    pub fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+    ) -> Result<(u16, Vec<u8>), String> {
         let mut target = String::from(path);
         if target.is_empty() {
             target.push('/');
@@ -288,7 +330,10 @@ impl Client {
             self.host, self.port
         );
         if let Some(b) = body {
-            head.push_str(&format!("Content-Type: application/json\r\nContent-Length: {}\r\n", b.len()));
+            head.push_str(&format!(
+                "Content-Type: application/json\r\nContent-Length: {}\r\n",
+                b.len()
+            ));
         }
         head.push_str("Connection: close\r\n\r\n");
 
@@ -298,7 +343,9 @@ impl Client {
             .write_all(head.as_bytes())
             .map_err(|e| format!("write: {e}"))?;
         if let Some(b) = body {
-            stream.write_all(b).map_err(|e| format!("write body: {e}"))?;
+            stream
+                .write_all(b)
+                .map_err(|e| format!("write body: {e}"))?;
         }
         stream.flush().map_err(|e| format!("flush: {e}"))?;
 
@@ -310,8 +357,12 @@ impl Client {
                 break;
             }
             buf.extend_from_slice(&tmp[..n]);
+            if response_ready(&buf) {
+                break;
+            }
         }
-        let pos = header_end(&buf).ok_or_else(|| "malformed response (no header end)".to_string())?;
+        let pos =
+            header_end(&buf).ok_or_else(|| "malformed response (no header end)".to_string())?;
         let head = String::from_utf8_lossy(&buf[..pos]).into_owned();
         let mut lines = head.lines();
         let status = status_code(lines.next().unwrap_or_default());
@@ -332,7 +383,11 @@ impl Client {
         self.request("GET", path, None)
     }
 
-    pub fn post_json(&self, path: &str, value: &serde_json::Value) -> Result<(u16, Vec<u8>), String> {
+    pub fn post_json(
+        &self,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<(u16, Vec<u8>), String> {
         self.request("POST", path, Some(value.to_string().as_bytes()))
     }
 }
@@ -354,6 +409,15 @@ mod tests {
         assert_eq!(status_code("HTTP/1.1 200 OK"), 200);
         assert_eq!(status_code("HTTP/1.1 503 Service Unavailable"), 503);
         assert_eq!(status_code("garbage"), 0);
+    }
+
+    #[test]
+    fn response_ready_waits_for_content_length() {
+        let partial = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nab";
+        assert!(!response_ready(partial));
+        let full = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nabcde";
+        assert!(response_ready(full));
+        assert!(!response_ready(b"HTTP/1.1 200 OK\r\n\r\nabcde"));
     }
 
     #[test]

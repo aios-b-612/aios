@@ -1,0 +1,10 @@
+# Build artifacts
+build/
+target/
+*.img
+*.iso
+*.pcap
+
+# Editor / OS
+*.swp
+.DS_Store

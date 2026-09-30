@@ -22,7 +22,16 @@ pub struct CandleBackend {
 }
 
 fn resolve_tokenizer(model_path: &Path) -> Option<std::path::PathBuf> {
-    let dir = model_path.parent().unwrap_or_else(|| Path::new("."));
+    // `Path::parent` on a bare filename ("model.gguf") returns Some(""), not
+    // None, and the templates below are built by string interpolation. An empty
+    // dir therefore yields "/tokenizer.json" -- an absolute path at the
+    // filesystem root -- so a sibling tokenizer is never found and the model
+    // is reported as having no tokenizer at all. Only a path that actually
+    // carries a directory is usable here.
+    let dir = match model_path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
     let stem = model_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -33,7 +42,7 @@ fn resolve_tokenizer(model_path: &Path) -> Option<std::path::PathBuf> {
             .replace("{stem}", stem);
         let p = Path::new(&candidate);
         if p.is_file() {
-            return Some(p.to_path_buf());
+            return Some(p.to_owned());
         }
     }
     None
@@ -78,8 +87,8 @@ impl ComputeBackend for CandleBackend {
 
         let start = Instant::now();
         let mut file = std::fs::File::open(path)?;
-        let content = gguf_file::Content::read(&mut file)
-            .map_err(|e| Error::Msg(format!("gguf: {e}")))?;
+        let content =
+            gguf_file::Content::read(&mut file).map_err(|e| Error::Msg(format!("gguf: {e}")))?;
         let llama = qllama::ModelWeights::from_gguf(content, &mut file, &self.device)
             .map_err(|e| Error::Msg(format!("llama: {e}")))?;
         self.load_time = start.elapsed();
@@ -101,8 +110,14 @@ impl ComputeBackend for CandleBackend {
     }
 
     fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<String> {
-        let llama = self.llama.as_mut().ok_or_else(|| Error::Msg("no model loaded".into()))?;
-        let tokenizer = self.tokenizer.as_ref().ok_or_else(|| Error::Msg("no tokenizer loaded".into()))?;
+        let llama = self
+            .llama
+            .as_mut()
+            .ok_or_else(|| Error::Msg("no model loaded".into()))?;
+        let tokenizer = self
+            .tokenizer
+            .as_ref()
+            .ok_or_else(|| Error::Msg("no tokenizer loaded".into()))?;
 
         let prompt_ids = tokenizer
             .encode(prompt, true)
@@ -181,4 +196,55 @@ pub fn model_path(backend: &CandleBackend) -> &str {
 /// Model name (GGUF file stem) currently loaded.
 pub fn model_name(backend: &CandleBackend) -> &str {
     &backend.model_name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bare filename has an empty parent, which must not be interpolated
+    /// into an absolute "/tokenizer.json" lookup.
+    #[test]
+    fn resolve_tokenizer_finds_sibling_for_bare_filename() {
+        let dir = std::env::temp_dir().join(format!("aios-tok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stem = "bare-name-test";
+        std::fs::write(dir.join(format!("{stem}.tokenizer.json")), "{}").unwrap();
+
+        // Chdir is process-wide, so this test owns a unique dir and the other
+        // tokenizer tests are the only ones that touch the cwd.
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        // The result stays relative when the input was relative, so canonicalize
+        // before leaving the directory, then compare files.
+        let found = resolve_tokenizer(Path::new(&format!("{stem}.gguf")))
+            .map(|p| p.canonicalize().unwrap());
+        std::env::set_current_dir(prev).unwrap();
+
+        assert_eq!(
+            found,
+            Some(
+                dir.join(format!("{stem}.tokenizer.json"))
+                    .canonicalize()
+                    .unwrap()
+            ),
+            "tokenizer next to a bare filename must resolve in the cwd"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_tokenizer_prefers_stem_specific_file() {
+        let dir = std::env::temp_dir().join(format!("aios-tok2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model.tokenizer.json"), "{}").unwrap();
+        std::fs::write(dir.join("tokenizer.json"), "{}").unwrap();
+
+        let found = resolve_tokenizer(&dir.join("model.gguf"));
+        assert_eq!(
+            found.as_deref(),
+            Some(dir.join("model.tokenizer.json").as_path())
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

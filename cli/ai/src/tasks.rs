@@ -150,8 +150,9 @@ impl TaskRouter {
                     spec.clone()
                 }
                 None => {
-                    let prompt =
-                        route.prompt.ok_or_else(|| format!("task '{name}': new tasks need a \"prompt\""))?;
+                    let prompt = route
+                        .prompt
+                        .ok_or_else(|| format!("task '{name}': new tasks need a \"prompt\""))?;
                     TaskSpec {
                         name: name.clone(),
                         description: route.description.unwrap_or_default(),
@@ -187,8 +188,7 @@ impl TaskRouter {
 
     /// Default routing config path (env `AIOS_TASKS` or `/etc/ai/tasks.json`).
     pub fn default_tasks_file() -> String {
-        std::env::var("AIOS_TASKS")
-            .unwrap_or_else(|_| "/etc/ai/tasks.json".to_string())
+        std::env::var("AIOS_TASKS").unwrap_or_else(|_| "/etc/ai/tasks.json".to_string())
     }
 }
 

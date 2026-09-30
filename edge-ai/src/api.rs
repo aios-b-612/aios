@@ -1,7 +1,8 @@
 //! JSON API of the Edge AI OS daemon: health, models, infer, benchmark, logs
 //! and metrics, plus the HTML control panel at `/`.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aios_core::{default_models_dir, gguf, pretty_bytes, sha256_hex};
@@ -13,11 +14,29 @@ use crate::runtime::Runtime;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Upload state for chunked model uploads
+struct UploadState {
+    chunks: HashMap<(String, usize), Vec<u8>>, // (model_name, chunk_index) -> data
+    expected_chunks: HashMap<String, usize>,   // model_name -> total_chunks
+    sha256: HashMap<String, String>,           // model_name -> expected sha256
+    received_count: HashMap<String, usize>,    // model_name -> received chunks
+}
+
+impl UploadState {
+    fn new() -> Self {
+        Self {
+            chunks: HashMap::new(),
+            expected_chunks: HashMap::new(),
+            sha256: HashMap::new(),
+            received_count: HashMap::new(),
+        }
+    }
+}
+
 /// Build the request handler for a running daemon.
-pub fn handler(
-    runtime: Arc<Runtime>,
-) -> impl Fn(&Request) -> Response + Send + Sync + 'static {
-    move |req: &Request| handle(&runtime, req)
+pub fn handler(runtime: Arc<Runtime>) -> impl Fn(&Request) -> Response + Send + Sync + 'static {
+    let upload_state = Arc::new(Mutex::new(UploadState::new()));
+    move |req: &Request| handle(&runtime, &upload_state, req)
 }
 
 fn now() -> f64 {
@@ -27,7 +46,7 @@ fn now() -> f64 {
         .unwrap_or(0.0)
 }
 
-fn handle(rt: &Runtime, req: &Request) -> Response {
+fn handle(rt: &Runtime, upload_state: &Arc<Mutex<UploadState>>, req: &Request) -> Response {
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => Response::html(200, panel::index()),
         ("GET", "/api/health") => health(rt),
@@ -36,6 +55,9 @@ fn handle(rt: &Runtime, req: &Request) -> Response {
         ("GET", "/api/benchmark") => benchmark(rt, req),
         ("GET", "/api/logs") => logs(rt, req),
         ("GET", "/api/metrics") => metrics(rt),
+        // Model upload endpoints (chunked multipart)
+        ("POST", "/api/models/upload") => upload_chunk(upload_state, req),
+        ("POST", "/api/models/upload/finalize") => upload_finalize(rt, upload_state, req),
         (m, p) => Response::error(404, &format!("not found: {m} {p}")),
     }
 }
@@ -84,22 +106,38 @@ fn infer(rt: &Runtime, req: &Request) -> Response {
         Ok(v) => v,
         Err(e) => return Response::error(400, &e),
     };
-    let Some(prompt) = body.get("prompt").and_then(|v| v.as_str()).map(str::to_string) else {
+    let Some(prompt) = body
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+    else {
         return Response::error(400, "infer: missing \"prompt\"");
     };
-    let max_tokens = body.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(64) as usize;
+    let max_tokens = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(64) as usize;
     let Some(model) = body
         .get("model")
         .and_then(|v| v.as_str())
         .map(str::to_string)
         .or_else(|| default_model_name(rt))
     else {
-        return Response::error(503, "no model available (install one with 'ai install' or 'edge install')");
+        return Response::error(
+            503,
+            "no model available (install one with 'ai install' or 'edge install')",
+        );
     };
 
     match rt.infer(&model, &prompt, max_tokens) {
         Ok(out) => {
-            rt.log("info", format!("infer model={model} cached={} tps={:.2}", out.cached, out.tps));
+            rt.log(
+                "info",
+                format!(
+                    "infer model={model} cached={} tps={:.2}",
+                    out.cached, out.tps
+                ),
+            );
             Response::json(
                 200,
                 &json!({
@@ -203,7 +241,11 @@ fn logs(rt: &Runtime, req: &Request) -> Response {
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
     let logs = rt.logs();
-    let count = if tail > 0 { tail.min(logs.len()) } else { logs.len() };
+    let count = if tail > 0 {
+        tail.min(logs.len())
+    } else {
+        logs.len()
+    };
     let slice = if count == 0 {
         &logs[..]
     } else {
@@ -240,6 +282,230 @@ fn metrics(rt: &Runtime) -> Response {
                 "last_tps": stats.last_tps,
             },
             "history": history,
+        }),
+    )
+}
+
+/// Parse a simple multipart form field from the request body.
+/// Returns the value of the first non-file field with this name.
+///
+/// Takes no boundary: it locates the part by its `name="..."` header, which
+/// is what the daemon's chunk protocol actually needs, and the parameter was
+/// unused. A boundary-aware parser would be stricter — this would also match a
+/// *file* part called `model_name` — but the protocol never sends one, and
+/// pretending to check the boundary here without doing so would be worse.
+fn parse_multipart_field(body: &[u8], field_name: &str) -> Option<String> {
+    let body_str = String::from_utf8_lossy(body);
+    let field_marker = format!("name=\"{}\"\r\n\r\n", field_name);
+    body_str.find(&field_marker).and_then(|pos| {
+        let start = pos + field_marker.len();
+        body_str[start..]
+            .split_once("\r\n")
+            .map(|(v, _)| v.to_string())
+    })
+}
+
+/// Parse multipart chunk data from the request body.
+fn parse_multipart_chunk(body: &[u8], boundary: &str) -> Option<Vec<u8>> {
+    let boundary_marker = format!("\r\n--{}\r\n", boundary);
+    let boundary_end = format!("\r\n--{}--\r\n", boundary);
+    let body_vec = body;
+
+    // Find the chunk part (the part with file data)
+    if let Some(chunk_start) = body_vec
+        .windows(boundary_marker.len())
+        .position(|w| w == boundary_marker.as_bytes())
+    {
+        let after_boundary = &body_vec[chunk_start + boundary_marker.len()..];
+        // Skip headers to find the data
+        if let Some(header_end_pos) = after_boundary.windows(4).position(|w| w == b"\r\n\r\n") {
+            let data_start = header_end_pos + 4;
+            // Find next boundary or end boundary
+            let remaining = &after_boundary[data_start..];
+            if let Some(next_boundary) = remaining
+                .windows(boundary_marker.len())
+                .position(|w| w == boundary_marker.as_bytes())
+            {
+                let mut chunk = remaining[..next_boundary].to_vec();
+                if chunk.ends_with(b"\r\n") {
+                    chunk.truncate(chunk.len() - 2);
+                }
+                return Some(chunk);
+            } else if let Some(end_pos) = remaining
+                .windows(boundary_end.len())
+                .position(|w| w == boundary_end.as_bytes())
+            {
+                let mut chunk = remaining[..end_pos].to_vec();
+                if chunk.ends_with(b"\r\n") {
+                    chunk.truncate(chunk.len() - 2);
+                }
+                return Some(chunk);
+            }
+        }
+    }
+    None
+}
+
+fn upload_chunk(upload_state: &Arc<Mutex<UploadState>>, req: &Request) -> Response {
+    // Extract content-type and boundary
+    let content_type = req
+        .body
+        .windows(2)
+        .position(|w| w == b"\r\n")
+        .and_then(|pos| String::from_utf8(req.body[..pos].to_vec()).ok())
+        .unwrap_or_default();
+
+    let boundary = content_type
+        .split("boundary=")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .unwrap_or("");
+
+    if boundary.is_empty() {
+        return Response::error(400, "missing multipart boundary");
+    }
+
+    // Parse form fields
+    let model_name = parse_multipart_field(&req.body, "model_name").unwrap_or_default();
+    let sha256 = parse_multipart_field(&req.body, "sha256").unwrap_or_default();
+    let chunk_index = parse_multipart_field(&req.body, "chunk_index")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let total_chunks = parse_multipart_field(&req.body, "total_chunks")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // Parse chunk data
+    let chunk_data = parse_multipart_chunk(&req.body, boundary).unwrap_or_default();
+
+    if model_name.is_empty() || sha256.is_empty() || total_chunks == 0 {
+        return Response::error(
+            400,
+            "missing required fields: model_name, sha256, total_chunks",
+        );
+    }
+
+    let mut state = match upload_state.lock() {
+        Ok(s) => s,
+        Err(_) => return Response::error(500, "upload state lock failed"),
+    };
+
+    // Initialize on first chunk
+    if chunk_index == 0 {
+        state
+            .expected_chunks
+            .insert(model_name.clone(), total_chunks);
+        state.sha256.insert(model_name.clone(), sha256);
+        state.received_count.insert(model_name.clone(), 0);
+    }
+
+    state
+        .chunks
+        .insert((model_name.clone(), chunk_index), chunk_data);
+    *state.received_count.get_mut(&model_name).unwrap_or(&mut 0) += 1;
+
+    Response::json(
+        200,
+        &json!({ "status": "chunk received", "chunk_index": chunk_index }),
+    )
+}
+
+fn upload_finalize(
+    rt: &Runtime,
+    upload_state: &Arc<Mutex<UploadState>>,
+    req: &Request,
+) -> Response {
+    let body: serde_json::Value = match req.json() {
+        Ok(v) => v,
+        Err(e) => return Response::error(400, &e),
+    };
+
+    let model_name = match body.get("model_name").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return Response::error(400, "missing model_name"),
+    };
+    let expected_sha256 = match body.get("sha256").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return Response::error(400, "missing sha256"),
+    };
+    let total_chunks = match body.get("total_chunks").and_then(|v| v.as_u64()) {
+        Some(n) => n as usize,
+        None => return Response::error(400, "missing total_chunks"),
+    };
+
+    let mut state = match upload_state.lock() {
+        Ok(s) => s,
+        Err(_) => return Response::error(500, "upload state lock failed"),
+    };
+
+    // Verify all chunks received
+    let received = state.received_count.get(&model_name).copied().unwrap_or(0);
+    if received != total_chunks {
+        return Response::error(
+            400,
+            &format!("incomplete upload: {}/{} chunks", received, total_chunks),
+        );
+    }
+
+    // Assemble model file
+    let mut model_data = Vec::new();
+    for i in 0..total_chunks {
+        if let Some(chunk) = state.chunks.remove(&(model_name.clone(), i)) {
+            model_data.extend_from_slice(&chunk);
+        } else {
+            return Response::error(500, &format!("missing chunk {}", i));
+        }
+    }
+
+    // Verify SHA-256
+    let computed_sha256 = match aios_core::checksum::sha256_hex(model_data.as_slice()) {
+        Ok(s) => s,
+        Err(e) => return Response::error(500, &format!("sha256 compute failed: {e}")),
+    };
+
+    if computed_sha256 != expected_sha256 {
+        return Response::error(
+            400,
+            &format!(
+                "sha256 mismatch: expected {} got {}",
+                expected_sha256, computed_sha256
+            ),
+        );
+    }
+
+    // Save to models directory
+    let models_dir = aios_core::default_models_dir();
+    let model_path = std::path::Path::new(&models_dir).join(format!("{}.gguf", model_name));
+    if let Err(e) = std::fs::write(&model_path, &model_data) {
+        return Response::error(500, &format!("write model failed: {e}"));
+    }
+
+    // Register in aios-core registry
+    let entry =
+        match aios_core::install_model(&model_path, std::path::Path::new(&models_dir), &model_name)
+        {
+            Ok(e) => e,
+            Err(e) => return Response::error(500, &format!("registry install failed: {e}")),
+        };
+
+    // Add to runtime's model cache
+    if let Err(e) = rt.register_model(entry) {
+        return Response::error(500, &format!("runtime register failed: {e}"));
+    }
+
+    // Cleanup upload state
+    state.expected_chunks.remove(&model_name);
+    state.sha256.remove(&model_name);
+    state.received_count.remove(&model_name);
+
+    Response::json(
+        200,
+        &json!({
+            "status": "model installed",
+            "model": model_name,
+            "path": model_path.display().to_string(),
+            "size": model_data.len(),
+            "sha256": computed_sha256
         }),
     )
 }

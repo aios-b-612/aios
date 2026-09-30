@@ -1,0 +1,71 @@
+# AIOS - Developer OS image profile (Phase 1-2)
+#
+# Phase 1: bootable, userspace, filesystem, shell, network.
+# Phase 2: self-hosted Rust toolchain (rustc/cargo/clippy/rustfmt via the
+# `rust` recipe) plus the rest of `dev-essential` (gcc13, make, python,
+# cmake, ...) and `git` for crate checkout.
+# rustup does NOT run inside Redox; packages are managed by `pkg`.
+#
+# This profile is CONSOLE-ONLY: it includes upstream `server.toml`, so the
+# image has no GUI (no Orbital compositor, no orbterm). The upstream
+# `desktop-minimal.toml` is what carries Orbital; see
+# docs/DECISIONS.md (ADR-019) before adding a desktop profile.
+#
+# Upstream revision is pinned in platform/upstream.lock and materialized by
+# platform/scripts/bootstrap.sh — the `include` path below is relative to the
+# upstream tree, not to this repo.
+
+include = ["../../../redox-os/config/server.toml"]
+
+# General settings
+[general]
+# Filesystem size in MiB (sparse on host).
+#
+# The installed content is ~0.9 GiB, so this leaves ~2 GiB of scratch room
+# for cargo/rustc inside the guest.
+#
+# The ceiling here is NOT arbitrary: a bootable live ISO needs the whole
+# filesystem to fit in guest RAM. The live bootloader allocates one contiguous
+# block for the entire RedoxFS below 8 GiB (src/os/uefi/mod.rs, AllocateMaxAddress
+# = 0x2_0000_0000), because a CD-ROM is read-only and the live session works on
+# a RAM copy. Under QEMU the low-memory MMIO hole splits that region, so the
+# largest usable contiguous block is ~3 GiB. Measured: 3072 boots, 3584 dies in
+# the bootloader with SETUP PANIC "out of resources".
+#
+# Raising this past ~3 GiB silently breaks the live ISO (harddrive.img keeps
+# working, which is what makes it confusing). See
+# docs/gotchas/live-iso-ram-ceiling.md.
+filesystem_size = 3072
+# Do not prompt if settings are not defined
+prompt = false
+
+# Package settings
+[packages]
+# Rust example program that boots with the image (compiled inside the OS)
+hello-redox = {}
+# Self-hosted development toolchain (Phase 2)
+dev-essential = {}
+# VCS + TLS stack for pulling crates/deps inside the OS
+git = {}
+
+# AI Platform groundwork: model cache location (ADR-008)
+[[files]]
+path = "/var/lib/ai"
+data = ""
+directory = true
+mode = 0o755
+
+[[files]]
+path = "/var/lib/ai/models"
+data = ""
+directory = true
+mode = 0o755
+
+# Identify this variant
+[[files]]
+path = "/etc/ai-platform"
+data = """
+name = "aios-developer-os"
+phase = 1
+arch = "x86_64"
+"""

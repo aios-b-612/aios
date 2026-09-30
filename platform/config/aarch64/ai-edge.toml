@@ -1,0 +1,68 @@
+# AIOS - Edge AI OS image profile (Phase 1)
+#
+# Phase 1 scope: bootable minimal image without a desktop, booting to
+# a network-enabled shell. Edge AI service + web panel arrive in Phase 5.
+#
+# VERIFIED (aarch64 runtime): the image builds and boots to a login prompt and
+# an interactive shell on QEMU `virt` with an emulated NVMe device.
+#
+# The NVMe driver used to hang at namespace enumeration because the interrupt
+# was never delivered on aarch64 QEMU `virt`. That is fixed locally by
+# platform/patches/aarch64/nvmed-aarch64-poll-fence.patch (executor poll mode
+# plus DMA fences on the queue doorbells), which this profile's build applies.
+# `login:` -> `user` -> `id`/`uname -a` was confirmed on a rebuilt image.
+# Enabling `gic-version=3,its=on,iommu=smmuv3` does NOT help on its own: a boot
+# canary with those settings (900s, TCG) reached the bootloader, EL1 and
+# kernel_entry, then stalled before `login:`.
+#
+# This is QEMU evidence only. Physical Raspberry Pi is a separate matter: the
+# SDHCI driver matches only brcm,bcm2835-sdhci, so Pi 4 (BCM2711) is unsupported
+# and Pi 5 needs RP1/PCIe work.
+#
+# Because the netstack daemon starts as part of initfs userspace, the login
+# milestone is also the first point where the `tcp:` scheme is reachable, so
+# in-guest TCP cannot be exercised on this target until then.
+#
+# The x86_64 ai-developer profile is the currently validated runtime target.
+# See docs/gotchas/aarch64-nvmed-not-reproducible.md and ROADMAP.md Phase 5.
+
+include = ["../../../redox-os/config/server.toml"]
+
+# General settings
+[general]
+# Filesystem size in MiB
+filesystem_size = 2048
+# Do not prompt if settings are not defined
+prompt = false
+
+[packages]
+# The upstream server.toml include does NOT bring in coreutils, and this
+# profile adds no [packages] of its own, so the image shipped with no basic
+# userspace tools. That is not merely a test-harness problem: the boot canary
+# cannot read /etc/ai-platform without `cat`, and neither can a human
+# inspecting a device over serial. Verified before adding: a login succeeded
+# and `ls /var/lib/ai` worked, while `cat /etc/ai-platform` failed with
+# "[ld.so]: failed to link '/usr/bin/cat': NotFound".
+coreutils = {}
+
+# AI Platform groundwork: model cache location (ADR-008)
+[[files]]
+path = "/var/lib/ai"
+data = ""
+directory = true
+mode = 0o755
+
+[[files]]
+path = "/var/lib/ai/models"
+data = ""
+directory = true
+mode = 0o755
+
+# Identify this variant
+[[files]]
+path = "/etc/ai-platform"
+data = """
+name = "aios-edge-os"
+phase = 1
+arch = "aarch64"
+"""

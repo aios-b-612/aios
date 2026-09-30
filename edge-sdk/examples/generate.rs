@@ -10,7 +10,10 @@ use aios_sdk::{generate_with_metrics, load};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let model_name = args.get(1).map(|s| s.as_str()).unwrap_or("tinyllama.q4_k_m");
+    let model_name = args
+        .get(1)
+        .map(|s| s.as_str())
+        .unwrap_or("tinyllama.q4_k_m");
     let prompt = args
         .get(2)
         .map(|s| s.as_str())
@@ -24,5 +27,8 @@ fn main() {
     println!("loaded: {}", model.path);
     println!("prompt: {prompt}");
     println!("text:   {}", gen.text);
-    println!("load:   {:.0} ms ({:.2} t/s)", gen.load_ms, gen.tokens_per_second);
+    println!(
+        "load:   {:.0} ms ({:.2} t/s)",
+        gen.load_ms, gen.tokens_per_second
+    );
 }

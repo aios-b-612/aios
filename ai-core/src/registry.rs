@@ -43,15 +43,20 @@ impl Registry {
                 }
                 let cols: Vec<&str> = line.split('\t').collect();
                 if cols.len() != 4 {
-                    return Err(format!("registry {} line {}: expected 4 cols", file.display(), i + 1).into());
+                    return Err(format!(
+                        "registry {} line {}: expected 4 cols",
+                        file.display(),
+                        i + 1
+                    )
+                    .into());
                 }
                 entries.push(RegistryEntry {
                     name: cols[0].to_string(),
                     path: cols[1].to_string(),
                     sha256: cols[2].to_string(),
-                    size_bytes: cols[3]
-                        .parse()
-                        .map_err(|_| format!("registry {} line {}: bad size", file.display(), i + 1))?,
+                    size_bytes: cols[3].parse().map_err(|_| {
+                        format!("registry {} line {}: bad size", file.display(), i + 1)
+                    })?,
                 });
             }
         }
@@ -87,7 +92,10 @@ impl Registry {
         }
         let mut out = String::from("# AIOS model registry: name\tpath\tsha256\tsize\n");
         for e in &self.entries {
-            out.push_str(&format!("{}\t{}\t{}\t{}\n", e.name, e.path, e.sha256, e.size_bytes));
+            out.push_str(&format!(
+                "{}\t{}\t{}\t{}\n",
+                e.name, e.path, e.sha256, e.size_bytes
+            ));
         }
         fs::write(&self.file, out)?;
         Ok(())

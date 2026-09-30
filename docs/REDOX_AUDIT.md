@@ -174,7 +174,7 @@ Regras importantes:
 | Item | Estado |
 |---|---|
 | Suporte kernel aarch64 | Sim, boot via UEFI (kernel `aarch64-unknown-redox`) |
-| QEMU aarch64 (virt) | Boot UEFI → bootloader → kernel OK; **userland bloqueado no master (corrigido em 2026‑09‑25)**: causa raiz era falta de fences de ordering DMA + IRQ não entregue em aarch64; resolvido com fences `Acquire/Release` em `queues.rs` + modo polling no executor (`set_poll_mode(true)`). Agora o init do nvmed completa, ambos os discos NVMe são reconhecidos e a userland avança para o prompt de login. Upstream não tem CI de boot aarch64 (só `repo-tree`). |
+| QEMU aarch64 (virt) | Boot UEFI → bootloader → kernel OK. **Userland parcialmente desbloqueada (2026‑09‑27)**: o init do nvmed completa, os dois discos NVMe são reconhecidos e a sequência chega ao prompt de login. As fences `Acquire/Release` em `queues.rs` e o modo polling no executor resolvem o driver. **Sem correção para o bloqueio restante**: filho de um pai multi-threaded (`ion` a fazer fork/exec, por exemplo `cat`) aborta com `Not an SVC induced synchronous exception (ty=111100)` / `ESR_EL1=0xF2000001` (`brk #1` do `verify()` do relibc, em `libc+0x139A9C`). A teoria da flag `tpidr_el1+368` foi retratada. Relatório: `docs/FORK_ION_DIAG.md`. Upstream não tem CI de boot aarch64 (só `repo-tree`). |
 | Raspberry Pi 3 Model B+ | **Reportado como "Booting"** na HARDWARE.md (0.8.0, server, ARM64, console UART pl011) |
 | Raspberry Pi 4 | **NÃO listado** — nenhum suporte validado |
 | Raspberry Pi 5 | **NÃO listado** — nenhum suporte validado |
