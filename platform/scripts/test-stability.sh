@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
-# Repeated-command stability test for the aarch64 QEMU `virt` image.
+# Repeated-command stability test for a built AIOS image.
 #
 # WHY THIS EXISTS, SEPARATE FROM test.sh
 #
-# test.sh asks "did the image boot?". That question cannot see memory
-# corruption. When the NVMe poll-mode wakeup drained the executor's external
-# event map, the image booted perfectly and passed every boot milestone while
-# silently corrupting unrelated processes: six byte-identical
-# `cat /etc/ai-platform` invocations in one boot produced two correct outputs
-# and four guard-page crashes. A canary checks login and runs `cat` once, so
-# it passed roughly two times in three.
+# test.sh asks "did the image boot?". That question cannot see intermittent
+# crashes. On this image, `uutils` binaries (`ls`, `cat`) intermittently
+# overflow their own stack and take a guard-page fault. A boot canary logs in
+# and runs each command once, so it passes while the underlying rate is roughly
+# 1 failure in 10.
 #
-# The failure rate only shows up when the same command is run repeatedly inside
-# a single boot. That is what this script does: it runs each command N times and
+# The rate only shows up when the same command is repeated inside a single
+# boot. That is what this script does: it runs each command N times and
 # requires every single one to succeed, with zero unhandled exceptions.
 #
-# Usage:
-#   test-aarch64-stability.sh [-c CONFIG] [-n REPEATS] [-t SECONDS]
+# It runs on x86_64 too, and that is the point: the control run proved the
+# crash is NOT caused by the aarch64 NVMe patch, since x86_64 never applies it
+# and still fails. See docs/gotchas/security-isolation.md.
 #
+# Measured, 10 repeats per command, one boot each:
+#   aarch64 (patch applied): ls 6-8/10, cat 8/10
+#   x86_64 (no patch at all): ls 10/10,  cat 9-10/10
+#
+# Usage:
+#   test-stability.sh [-a ARCH] [-c CONFIG] [-n REPEATS] [-t SECONDS]
+#
+#   -a ARCH     x86_64 or aarch64 (default: aarch64)
 #   -c CONFIG   image profile (default: ai-edge)
 #   -n REPEATS  invocations per command, per boot (default: 10)
 #   -t SECONDS  test timeout (default: 900)
@@ -29,8 +36,8 @@
 #
 # Environment:
 #   REDOX_SOURCE  upstream redox tree (default <platform>/../redox-os)
-#   BOOT_LOG      where to keep the console log (default /tmp/aios-stability-aarch64.log)
-#   LOGIN_DELAY   seconds to wait before logging in (default: 200)
+#   BOOT_LOG      where to keep the console log (default /tmp/aios-stability-<arch>.log)
+#   LOGIN_DELAY   seconds to wait before logging in (default: 200 aarch64, 100 x86_64)
 
 set -euo pipefail
 
@@ -43,12 +50,13 @@ CONFIG_NAME="ai-edge"
 REPEATS=10
 TIMEOUT_SECS=900
 
-while getopts ":c:n:t:h" opt; do
+while getopts ":a:c:n:t:h" opt; do
     case "$opt" in
+        a) ARCH="$OPTARG" ;;
         c) CONFIG_NAME="$OPTARG" ;;
         n) REPEATS="$OPTARG" ;;
         t) TIMEOUT_SECS="$OPTARG" ;;
-        h) echo "Usage: test-aarch64-stability.sh [-c CONFIG] [-n REPEATS] [-t SECONDS]"; exit 0 ;;
+        h) echo "Usage: test-stability.sh [-a ARCH] [-c CONFIG] [-n REPEATS] [-t SECONDS]"; exit 0 ;;
         \?) echo "Unknown option -$OPTARG" >&2; exit 1 ;;
     esac
 done
@@ -59,19 +67,38 @@ case "${REPEATS}" in
 esac
 [ "${REPEATS}" -gt 0 ] || { echo "ERROR: -n must be greater than zero" >&2; exit 1; }
 
-QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
+case "${ARCH}" in
+    aarch64)
+        QEMU_BIN="${QEMU_BIN:-qemu-system-aarch64}"
+        # aarch64 `virt` has no BIOS, so the image needs UEFI firmware.
+        BIOS="${QEMU_BIOS:-/usr/share/qemu-efi-aarch64/QEMU_EFI.fd}"
+        [ -f "${BIOS}" ] || BIOS="/usr/share/qemu/edk2-aarch64-code.fd"
+        [ -f "${BIOS}" ] || { echo "ERROR: no aarch64 UEFI firmware found" >&2; exit 2; }
+        LOGIN_DELAY="${LOGIN_DELAY:-200}"
+        # x86_64 keeps KVM when available; aarch64 on an x86_64 host cannot, so
+        # it is always TCG and always slow.
+        ARCH_ARGS="-accel tcg -machine virt -cpu max -smp 1 -m 2048 -bios ${BIOS}"
+        ;;
+    x86_64)
+        QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
+        LOGIN_DELAY="${LOGIN_DELAY:-100}"
+        # -machine accel= is used instead of -accel because passing both is an
+        # error in current QEMU.
+        ARCH_ARGS="-machine q35,accel=kvm:tcg -cpu qemu64 -smp 1 -m 2048"
+        ;;
+    *)
+        echo "ERROR: stability test not defined for ARCH ${ARCH}" >&2
+        exit 2
+        ;;
+esac
+
 command -v "${QEMU_BIN}" >/dev/null 2>&1 || { echo "ERROR: ${QEMU_BIN} not installed" >&2; exit 2; }
 
 BUILD="${REDOX_SOURCE}/build/${ARCH}/${CONFIG_NAME}"
 IMG="${BUILD}/harddrive.img"
 [ -f "${IMG}" ] || { echo "ERROR: no image found in ${IMG}" >&2; exit 2; }
 
-BIOS="${QEMU_BIOS:-/usr/share/qemu-efi-aarch64/QEMU_EFI.fd}"
-[ -f "${BIOS}" ] || BIOS="/usr/share/qemu/edk2-aarch64-code.fd"
-[ -f "${BIOS}" ] || { echo "ERROR: no aarch64 UEFI firmware found" >&2; exit 2; }
-
-LOGIN_DELAY="${LOGIN_DELAY:-200}"
-BOOT_LOG="${BOOT_LOG:-/tmp/aios-stability-aarch64.log}"
+BOOT_LOG="${BOOT_LOG:-/tmp/aios-stability-${ARCH}.log}"
 
 # Each command below must print its marker on every single repeat. The marker is
 # what proves the guest-side command actually ran and returned real data, rather
@@ -85,7 +112,7 @@ case "${CONFIG_NAME}" in
     *) CAT_MARKER="${CONFIG_NAME}" ;;
 esac
 
-echo "==> AIOS aarch64 stability test"
+echo "==> AIOS ${ARCH} stability test"
 echo "    image:   ${IMG}"
 echo "    repeats: ${REPEATS} per command, single boot"
 echo "    timeout: ${TIMEOUT_SECS}s"
@@ -114,9 +141,7 @@ set +e
     printf 'exit\n' || true
     sleep 2
 ) 2>/dev/null | timeout --foreground "${TIMEOUT_SECS}" "${QEMU_BIN}" \
-    -accel tcg \
-    -bios "${BIOS}" \
-    -machine virt -cpu max -smp 1 -m 2048 \
+    ${ARCH_ARGS} \
     -drive file="${IMG}",format=raw,if=none,id=drv0 \
     -device nvme,drive=drv0,serial=NVME_SERIAL \
     -device e1000,netdev=net0 -netdev user,id=net0 \

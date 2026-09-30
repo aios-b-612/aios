@@ -202,39 +202,58 @@ a single `cat` succeeds most of the time. A canary that checks "did it reach a
 login prompt" walks straight past it. The failure rate only shows up when the
 same command is repeated inside one boot.
 
-### The `drain()` fix did not eliminate the corruption
+### The `drain()` fix did not eliminate the corruption, and is not the cause
 
 Measuring it properly, with
-`platform/scripts/test-aarch64-stability.sh` (10 repeats of `ls` and `cat` in a
-single boot), both before and after:
+`platform/scripts/test-stability.sh` (10 repeats of `ls` and `cat` in a
+single boot):
 
 | build | `ls` ok | `ls` crashes | `cat` ok | `cat` crashes |
 | --- | --- | --- | --- | --- |
-| with the `drain()` | — | — | 2/6 | 4 |
-| after the fix | 8/10 | 2 | 8/10 | 1 |
+| aarch64, with the `drain()` | — | — | 2/6 | 4 |
+| aarch64, after the fix (run 1) | 8/10 | 2 | 8/10 | 1 |
+| aarch64, after the fix (run 2) | 6/10 | 3 | 8/10 | 2 |
+| **x86_64, no patch at all** | **10/10** | **0** | **9/10** | **1** |
 
-The UAF was a genuine bug and fixing it roughly halved the crash rate, but
-**aarch64 is still corrupting memory**. A 6-repeat run that came back 6/6 was a
-small sample, not the fix working; at an 80% success rate, 6/6 has a ~26%
-chance of happening by luck. Treat 6/6 as noise, not as a verdict.
+A 6-repeat run that came back 6/6 was a small sample, not the fix working: at an
+80% success rate, 6/6 happens by chance about 26% of the time. Treat 6/6 as
+noise, not as a verdict.
 
-The remaining faults are a data abort on the process's own stack pointer:
+**The control run settles it: x86_64, which never applies this patch, also
+crashes** (9/10, one guard-page fault, same signature). So the corruption is
+**not** caused by the NVMe patch, the poll mode, or the DMA fences. The `drain()`
+UAF was a real bug worth fixing on its own merits, but it is not this bug, and
+fixing it roughly halved aarch64's crash rate for reasons not yet understood.
+
+The fault is a data abort on the process's own stack pointer, on both
+architectures:
 
 ```
-ESR_EL1: 0000000092000007     # data abort from a lower EL, access flag fault
+# aarch64
+ESR_EL1: 0000000092000007     # data abort from a lower EL
 SP_EL0:  00007FFFFFFFC990
   00007fffffffc990: GUARD PAGE
 UNHANDLED EXCEPTION ... NAME /usr/bin/ls
+
+# x86_64
+FP 00007fffffffe7b0: PC 0000000000db8138
+kernel::arch::x86_shared::interrupt::exception::page::inner
+  00007fffffffe7b0: GUARD PAGE
+UNHANDLED EXCEPTION ... NAME /usr/bin/cat
 ```
 
-The fault address equals `SP_EL0`, so the process faults writing its own stack
-— that is stack overflow, not a wild pointer. Since it is intermittent on
-identical commands, the likely cause is the poll timer firing every 10ms while
-unrelated processes are running, and the interaction is still unexplained.
+The faulting address is always the top of the process's own stack, so these are
+**stack overflows inside the `uutils` binaries**, not wild pointers from another
+process. The binaries come from `recipes/core/uutils/recipe.toml` (`coreutils`
+0.11.0), whose recipe already carries a standing TODO about a Redox-specific
+locale init bug involving `OnceLock` plus `thread_local`. Recursion depth or
+thread stacks in those binaries, not NVMe, is where to look next.
 
-This is an open aarch64 userspace/kernel bug, not a solved one. Do not claim
-aarch64 memory safety. `test-aarch64-stability.sh` is the gate: it must go
-10/10 with zero crashes before the claim is revisited.
+This is an open, pre-existing Redox bug. It is aarch64's real blocker, and
+because it reproduces on x86_64 it also puts that earlier "x86_64 fully
+validated" claim under suspicion. Do not claim memory safety on either
+architecture. `test-stability.sh` is the gate: 10/10 with zero crashes
+before any such claim.
 
 ### Known limitation
 `--gic-v3` is retained in `test.sh` as an option, but the aarch64 CI job no

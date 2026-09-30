@@ -57,8 +57,8 @@ no runner sem display, que é a configuração que de fato importa.
 **Critério**: `make qemu` (ou script próprio) boots até o prompt do ion; filesystem acessível; rede `smolnetd`/`dhcpd` ativa; `make qemu` aarch64 também bootstrap.
 
 **Status da validação (2026-09-24)**:
-- x86_64 ai-developer: **PASS** — boot → login `user` → `/var/lib/ai/models` e `/etc/ai-platform` presentes (canário `scripts/test.sh`, KVM).
-- aarch64 ai-edge: imagem constrói; canário bootloader+kernel **PASS**; userland **não bloqueada para login** — o fix de fences DMA + modo polling em `nvmed` permite boot até o prompt de login (2026‑09‑25). **Bloqueado para uso**: há corrupção intermitente de memória em aarch64 (8/10 em `ls` e `cat` em 2026‑09‑30); ver `gotchas/security-isolation.md` e `platform/scripts/test-aarch64-stability.sh`.
+- x86_64 ai-developer: **PASS** no canário de boot — boot → login `user` → `/var/lib/ai/models` e `/etc/ai-platform` presentes (canário `scripts/test.sh`, KVM). **Ressalva (2026‑09‑30)**: o canário roda `ls`/`cat` uma vez cada, e o teste de estabilidade mostrou 9/10 também em x86_64, ou seja, o mesmo estouro de pilha intermitente dos `uutils` existe aqui, e passar no canário não prova ausência de crashes. Ver `gotchas/security-isolation.md`.
+- aarch64 ai-edge: imagem constrói; canário bootloader+kernel **PASS**; userland **não bloqueada para login** — o fix de fences DMA + modo polling em `nvmed` permite boot até o prompt de login (2026‑09‑25). **Bloqueado para uso**: há corrupção intermitente de memória em aarch64 (8/10 em `ls` e `cat` em 2026‑09‑30); ver `gotchas/security-isolation.md` e `platform/scripts/test-stability.sh`.
 
 ---
 
@@ -130,7 +130,7 @@ no runner sem display, que é a configuração que de fato importa.
 
 **Revisto (2026‑09‑29)**: a afirmação anterior de que `netstack` aborta no boot **não se sustenta** — a string `netstack` não aparece em nenhum dos logs de boot (local e CI) com a imagem atual. O que era visto antes era provavelmente consequência do travamento do `nvmed`, já corrigido. O round‑trip TCP in‑guest (`edge status` / `edge models`) continua **não exercitado**, então não é uma regressão confirmada: é uma lacuna de evidência. O próximo passo é medir `curl`/TCP in‑guest explicitamente e só então declarar o serviço de borda pronto.
 
-**Status (2026‑09‑30)**: o `ai-edge` aarch64 **boots**, mas **não está validado** — e a alegação anterior de validação (2026‑09‑29) foi falsa. O build completa e chega a `login:`, porém o usuário corrompe memória de forma intermitente: `platform/scripts/test-aarch64-stability.sh` mediu 8/10 em `ls` e 8/10 em `cat`, com 3 guard-page faults num único boot. Um UAF real no wakeup por polling do `nvmed` foi encontrado e corrigido (reduziu a taxa ~ pela metade), mas a causa restante é desconhecida. Ver `gotchas/security-isolation.md`. Nenhuma alegação de segurança de memória em aarch64 é válida até o teste de estabilidade dar 10/10 sem crashes. Pendente também a validação TCP in‑guest. O alvo de runtime
+**Status (2026‑09‑30)**: o `ai-edge` aarch64 **boots**, mas **não está validado** — e a alegação anterior de validação (2026‑09‑29) era falsa. O build completa e chega a `login:`, porém há estouro de pilha intermitente nos binários `uutils` (`ls`/`cat`): `platform/scripts/test-stability.sh` mediu 8/10 e 6/10 em dois runs aarch64. O experimento de controle mostrou **9/10 também em x86_64, sem nenhum patch**, então a causa **não** é o fix do `nvmed` — é um bug pré‑existente do Redox nos `uutils`. Um UAF real no `nvmed` foi corrigido no mesmo período, mas não era a causa. Ver `gotchas/security-isolation.md`. Pendente também a validação TCP in‑guest. O alvo de runtime
 validado em x86_64 continua sendo o perfil `ai-developer` (perfil sem GUI); o aarch64 permanece como alvo de deploy futuro.
 
 ---

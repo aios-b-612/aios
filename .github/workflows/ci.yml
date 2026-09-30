@@ -107,6 +107,16 @@ jobs:
       - name: Run x86_64 boot test
         run: ./platform/scripts/test.sh -a x86_64 -c ai-developer -t 300
 
+      # Same reasoning as the aarch64 stability step: the boot canary runs
+      # `ls`/`cat` once each, and this image intermittently faults them too
+      # (9/10 measured on an unpatched x86_64 image). Kept as a reported,
+      # non-blocking signal for the same reason.
+      - name: Run x86_64 stability test (reported, non-blocking)
+        continue-on-error: true
+        run: |
+          ./platform/scripts/test-stability.sh -a x86_64 -c ai-developer \
+            -n 10 -t 500
+
       - name: Upload boot log
         if: always()
         uses: actions/upload-artifact@v4
@@ -115,7 +125,7 @@ jobs:
           # if-no-files-found: warn -- a build that dies before the boot test
           # leaves no log, and that should not itself be a hard error.
           if-no-files-found: warn
-          path: /tmp/aios-boot-*.log
+          path: /tmp/aios-*.log
 
   boot-test-aarch64:
     name: QEMU Boot Test (aarch64, kernel canary)
@@ -193,7 +203,7 @@ jobs:
       - name: Run aarch64 stability test (expected to fail)
         continue-on-error: true
         run: |
-          LOGIN_DELAY=200 ./platform/scripts/test-aarch64-stability.sh \
+          LOGIN_DELAY=200 ./platform/scripts/test-stability.sh \
             -c ai-edge -n 10 -t 900
 
       - name: Upload aarch64 boot log
