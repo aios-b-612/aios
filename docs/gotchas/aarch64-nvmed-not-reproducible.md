@@ -218,10 +218,16 @@ directory named `models`, not because any model loaded.
 
 ## Interim position
 
-- **x86_64 `ai-developer`: validated** (boot → login → real inference).
-- **aarch64 `ai-edge`: validated** (boot → login → interactive shell, and the
-  headless canary passes every milestone) with the patch applied in-tree, on
-  QEMU `virt` with an emulated NVMe device.
+- **x86_64 `ai-developer**: boots and reaches real inference.** Not claimed
+  validated: the repeated-command test faults `cat` intermittently here too.
+- **aarch64 `ai-edge**: boots to a login prompt and a shell with the patch
+  applied in-tree.** Not validated either, and worse than x86_64: `ls` and
+  `cat` fail roughly 1 in 4 to 1 in 3 runs.
+
+Both are limited by the same pre-existing `uutils` stack overflow, not by this
+patch. See `security-isolation.md` and `platform/scripts/test-stability.sh`.
+A boot canary runs each command once and cannot see an intermittent rate, so
+passing the canary is not evidence of stability.
 
 Neither of these says anything about physical Raspberry Pi hardware, which has
 its own open problems: the SDHCI driver only matches `brcm,bcm2835-sdhci`, so
@@ -229,3 +235,34 @@ BCM2711 (Pi 4) is unsupported, and Pi 5 needs separate RP1/PCIe work.
 
 `platform/scripts/release.sh` records the kernel `source_identifier` of every
 artifact precisely so this cannot be silently forgotten again.
+
+## Rebuilding after a source patch: three traps
+
+Editing the tree under `recipes/core/base/source/` and re-running `build.sh`
+does **not** reliably rebuild the image. All three of these have to be dealt
+with, in order:
+
+1. **`repo/<arch>/base.pkgar` shadows your source.** With `repo-bin: 0` the
+   installer still extracts the prebuilt package if it is present, so the patch
+   never reaches the image. Delete it (back it up first) to force a cook.
+2. **`build/<arch>/<config>/repo.tag` gates the cook.** `make` treats it as up
+   to date and skips `make cook` entirely, printing `Extracting base` and
+   compiling nothing. Delete it.
+3. **A `source_info.toml` written before your edit forces a re-cook** of every
+   downstream package, and some of them need `autopoint` (from `gettext`),
+   which is not installed and needs `sudo` to install. The cross-compiled
+   `autopoint` in the Redox tree is a shell script and does run on the host,
+   but it looks for its data in `/usr/share/gettext` and that directory is
+   absent. A wrapper that exports `gettext_datadir` to the tree's copy under
+   `recipes/tools/gettext/target/<host-arch>/stage/usr/share/gettext` is
+   enough to get past it.
+
+`platform/scripts/rebuild.sh` does all of this: it clears the three caches,
+shims `autopoint` into `/tmp` (no root needed), forces `REPO_BINARY=0`, and
+prints the resulting `nvmed` build timestamp so a stale binary is obvious.
+
+Only after that does `cook base - successful` appear and a fresh `nvmed`
+binary appear under `recipes/core/base/target/<arch>/build/`. Verify that
+binary's timestamp before trusting any test result; a stale one silently
+invalidates every measurement, which is how a 6/6 result was briefly mistaken
+for a fix.
