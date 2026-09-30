@@ -131,9 +131,15 @@ LOCK_OVERRIDE="${REDOX_SOURCE}/cookbook.lock"
 # prebuilt source.pkgar for a patched recipe instead of fetching its source. A
 # patch would then be silently skipped, so the recipe is pinned to the "source"
 # rule in cookbook.lock, which overrides both the recipe default and
-# --repo-binary. cookbook.lock is only ever written by `repo change-rule*`, so
-# the entry persists across builds; it is still managed here so a clean tree
-# gets it without a separate repo invocation.
+# --repo-binary. It is still managed here so a clean tree gets it without a
+# separate repo invocation.
+#
+# This file is untracked and generated, and only the [recipes.base] table below
+# is ours. Other tables in it come from whoever last ran the cookbook locally and
+# are carried through untouched, so do not assume every entry in it is a real
+# pin: a local tree has been seen carrying a placeholder
+# `[recipes.bash] gitrev = "abc123"`, which pins nothing. Treat the rest of the
+# file as unverified.
 #
 # Equivalent to: repo change-rule-local base --set-rule=source
 write_lock_entry() {

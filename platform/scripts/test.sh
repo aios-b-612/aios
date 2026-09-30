@@ -8,7 +8,9 @@
 #   test.sh [-a ARCH] [-c CONFIG] [-t SECONDS] [--gic-v3]
 #
 #   -t SECONDS   test timeout (default: 600 for aarch64, 120 otherwise)
-#   --gic-v3     enable GICv3/ITS on QEMU virt machine (aarch64 only)
+#   --gic-v3     enable GICv3/ITS on QEMU virt machine (aarch64 only). NOT for
+#                normal runs: it faults userspace on this image, so the test
+#                cannot reach the milestones. Only for reproducing that.
 #
 # Exit codes:
 #   0  PASS   every milestone for the arch was reached
@@ -158,10 +160,16 @@ case "${ARCH}" in
         BIOS="${QEMU_BIOS:-/usr/share/qemu-efi-aarch64/QEMU_EFI.fd}"
         [ -f "${BIOS}" ] || BIOS="/usr/share/qemu/edk2-aarch64-code.fd"
         [ -f "${BIOS}" ] || { echo "ERROR: no aarch64 UEFI firmware found in /usr/share/qemu-efi-aarch64 or /usr/share/qemu" >&2; exit 2; }
-        # GICv3/ITS support for NVMe IRQ delivery
+        # GICv3/ITS was carried over as a suspected fix for the NVMe hang and
+        # was never verified as either a cause or a workaround. It is now
+        # known to break this image: with it, userspace faults with an
+        # unhandled exception and a guard-page fault (`ls` and `cat` both die),
+        # so the milestones this test exists to check cannot be reached. Kept
+        # only for reproducing that behaviour; see
+        # docs/gotchas/security-isolation.md.
         if [ "${GIC_V3}" -eq 1 ]; then
             MACHINE="virt,gic-version=3,its=on,iommu=smmuv3"
-            echo "  [INFO] GICv3/ITS + SMMUv3 IOMMU enabled for NVMe IRQ delivery"
+            echo "  [INFO] GICv3/ITS + SMMUv3 IOMMU enabled (known to break userspace on this image)"
         fi
         ;;
     i586)

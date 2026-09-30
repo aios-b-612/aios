@@ -58,7 +58,7 @@ no runner sem display, que é a configuração que de fato importa.
 
 **Status da validação (2026-09-24)**:
 - x86_64 ai-developer: **PASS** — boot → login `user` → `/var/lib/ai/models` e `/etc/ai-platform` presentes (canário `scripts/test.sh`, KVM).
-- aarch64 ai-edge: imagem constrói; canário bootloader+kernel **PASS**; userland **já não bloqueada** — o fix de fences DMA + modo polling em `nvmed` permite boot até o prompt de login (validado em 2026‑09‑25). Blocker resolvido; reavaliar integração futura.
+- aarch64 ai-edge: imagem constrói; canário bootloader+kernel **PASS**; userland **não bloqueada para login** — o fix de fences DMA + modo polling em `nvmed` permite boot até o prompt de login (2026‑09‑25). **Bloqueado para uso**: há corrupção intermitente de memória em aarch64 (8/10 em `ls` e `cat` em 2026‑09‑30); ver `gotchas/security-isolation.md` e `platform/scripts/test-aarch64-stability.sh`.
 
 ---
 
@@ -128,9 +128,9 @@ no runner sem display, que é a configuração que de fato importa.
 
 **Status (2026-09-25)**: rebuild da imagem completada após corrupção da `harddrive.img` (causa: boot/montagem FUSE concorrentes no mesmo disco). Inject do perfil `ai-developer` renovado: bins `edge`/`edge-ai`, modelos (`tinyllama.q4_k_m`, `hello.w4gguf`...); marker `/etc/ai-platform` setado para `aios-developer-os`. **Validação in-guest**: daemon ≥ SMOKE bind-first confirmado (`M1_START`→`M2_BOUND_LOOPBACK`→`M3_TRY_LOOPBACK` com `edge-ai: listening on http://127.0.0.1:8989`).
 
-**Blocker (plataforma Redox, não aios)**: `netstack` (userspace netstack do Redox, iniciado pelo init, PID 40) **aborta no boot** sob este qemu: `UNHANDLED EXCEPTION ... /usr/bin/netstack` → `[ERROR netstack@src/header/stdlib/mod.rs:121] Abort`. Como o Redox atende o scheme `tcp:` **inteiramente via userspace netstack**, qualquer connect TCP in-guest (loopback **e** eth0 10.0.2.15) depende dele — logo `edge status`/`edge models` in-guest travam por causa do netstack, **não** do daemon. O bind-first do daemon (0.0.0.0→127.0.0.1) já está validado; resta validar o round-trip TCP completo quando o netstack parar de abortar (upstream Redox / config qemu). Detalhes: `gotchas/redox-netstack-abort-boot-blocker.md`.
+**Revisto (2026‑09‑29)**: a afirmação anterior de que `netstack` aborta no boot **não se sustenta** — a string `netstack` não aparece em nenhum dos logs de boot (local e CI) com a imagem atual. O que era visto antes era provavelmente consequência do travamento do `nvmed`, já corrigido. O round‑trip TCP in‑guest (`edge status` / `edge models`) continua **não exercitado**, então não é uma regressão confirmada: é uma lacuna de evidência. O próximo passo é medir `curl`/TCP in‑guest explicitamente e só então declarar o serviço de borda pronto.
 
-**Status (2026‑09‑29)**: o `ai-edge` aarch64 está **validado** — build completo, boot até `login:`, shell interativo e canário headless com todos os milestones em PASS. O fix do `nvmed` (fences DMA + modo polling) está in-tree e aplicado pelo build; ver `gotchas/aarch64-nvmed-not-reproducible.md`. Pendente permanece só o netstack e a validação TCP in‑guest. O alvo de runtime
+**Status (2026‑09‑30)**: o `ai-edge` aarch64 **boots**, mas **não está validado** — e a alegação anterior de validação (2026‑09‑29) foi falsa. O build completa e chega a `login:`, porém o usuário corrompe memória de forma intermitente: `platform/scripts/test-aarch64-stability.sh` mediu 8/10 em `ls` e 8/10 em `cat`, com 3 guard-page faults num único boot. Um UAF real no wakeup por polling do `nvmed` foi encontrado e corrigido (reduziu a taxa ~ pela metade), mas a causa restante é desconhecida. Ver `gotchas/security-isolation.md`. Nenhuma alegação de segurança de memória em aarch64 é válida até o teste de estabilidade dar 10/10 sem crashes. Pendente também a validação TCP in‑guest. O alvo de runtime
 validado em x86_64 continua sendo o perfil `ai-developer` (perfil sem GUI); o aarch64 permanece como alvo de deploy futuro.
 
 ---

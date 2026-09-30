@@ -1,5 +1,5 @@
 diff --git a/drivers/executor/src/lib.rs b/drivers/executor/src/lib.rs
-index 88c112e..1bf7088 100644
+index 88c112e1..ab6b5fe9 100644
 --- a/drivers/executor/src/lib.rs
 +++ b/drivers/executor/src/lib.rs
 @@ -17,6 +17,7 @@ use std::rc::Rc;
@@ -47,7 +47,7 @@ index 88c112e..1bf7088 100644
  }
  
  impl<Hw: Hardware> LocalExecutor<Hw> {
-@@ -197,6 +228,62 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
+@@ -197,6 +228,85 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
          Hw::current()
      }
  
@@ -90,10 +90,33 @@ index 88c112e..1bf7088 100644
 +            log::error!("executor: failed to re-arm poll timer: {err}");
 +        }
 +
-+        let waiters: Vec<_> = self.external_event.borrow_mut().drain().collect();
-+        for (_, (task, flags_ptr)) in waiters {
-+            unsafe { flags_ptr.as_ptr().write(EventFlags::READ) };
-+            enqueue::<Hw>(task);
++        // Snapshot the keys instead of draining the map. `flags_ptr` points into the
++        // caller's `ExternalEventHandle`, and that entry must stay in the map so that
++        // `Drop for ExternalEventHandle` can still find and remove it. Draining here
++        // turned Drop's `remove` into a no-op, so the entry was gone while the handle
++        // was still alive and the task still held a pointer into it; once the handle
++        // was freed the queued task wrote to recycled memory. That corrupted
++        // unrelated processes: `cat` and `virtio-netd` died with a guard-page fault
++        // in roughly 4 of 6 identical invocations, with no disk I/O involved.
++        //
++        // `enqueue` dedupes on `ready_link`, so re-notifying an already-queued task is
++        // a no-op, and re-arming every 10ms is harmless.
++        let user_datas: Vec<_> = self.external_event.borrow().keys().copied().collect();
++        for user_data in user_datas {
++            let waiter = self
++                .external_event
++                .borrow()
++                .get(&user_data)
++                .map(|(task, flags_ptr)| (task.clone(), *flags_ptr));
++
++            if let Some((task, flags_ptr)) = waiter {
++                // SAFETY: the entry is still in the map, which means the owning handle
++                // has not been dropped, so `flags_ptr` is still valid. It is read out
++                // of a single `borrow()` and written to afterwards, so the borrow must
++                // be released first (it is, by the `let` above).
++                unsafe { flags_ptr.as_ptr().write(EventFlags::READ) };
++                enqueue::<Hw>(task);
++            }
 +        }
 +
 +        self.poll_cqes();
@@ -110,7 +133,7 @@ index 88c112e..1bf7088 100644
      pub fn poll(&self) -> usize {
          assert!(!self.is_polling.replace(true));
  
-@@ -270,18 +357,28 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
+@@ -270,18 +380,28 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
          enqueue::<Hw>(task);
  
          loop {
@@ -143,7 +166,7 @@ index 88c112e..1bf7088 100644
          }
  
          let o = retval.borrow_mut().take().unwrap();
-@@ -290,6 +387,11 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
+@@ -290,6 +410,11 @@ impl<Hw: Hardware> LocalExecutor<Hw> {
      fn react(&self) {
          let event = self.queue.next_event().expect("failed to get next event");
  
@@ -155,7 +178,7 @@ index 88c112e..1bf7088 100644
          if event.user_data != 0 {
              let Some((task, flags_ptr)) = self.external_event.borrow_mut().remove(&event.user_data)
              else {
-@@ -606,6 +708,8 @@ pub fn init_raw<Hw: Hardware>(
+@@ -606,6 +731,8 @@ pub fn init_raw<Hw: Hardware>(
          external_event: RefCell::new(HashMap::new()),
          next_user_data: Cell::new(1),
          is_polling: Cell::new(false),
@@ -165,7 +188,7 @@ index 88c112e..1bf7088 100644
      }
  }
 diff --git a/drivers/storage/nvmed/src/nvme/executor.rs b/drivers/storage/nvmed/src/nvme/executor.rs
-index 623e9aa..632e779 100644
+index 623e9aaa..632e7793 100644
 --- a/drivers/storage/nvmed/src/nvme/executor.rs
 +++ b/drivers/storage/nvmed/src/nvme/executor.rs
 @@ -81,6 +81,7 @@ pub type NvmeExecutor = LocalExecutor<NvmeHw>;
@@ -177,7 +200,7 @@ index 623e9aa..632e779 100644
      this
  }
 diff --git a/drivers/storage/nvmed/src/nvme/queues.rs b/drivers/storage/nvmed/src/nvme/queues.rs
-index ffe2f84..8a52480 100644
+index ffe2f843..8a52480b 100644
 --- a/drivers/storage/nvmed/src/nvme/queues.rs
 +++ b/drivers/storage/nvmed/src/nvme/queues.rs
 @@ -1,10 +1,12 @@

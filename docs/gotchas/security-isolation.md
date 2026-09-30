@@ -141,19 +141,121 @@ None. This is a kernel/userspace bug in upstream Redox.
 This requires an upstream fix in the Redox `netstack` crate. The AIOS project
 cannot fix this without modifying the Redox kernel, which is out of scope.
 
-## NVMe Driver (aarch64 GICv3/ITS)
+## NVMe Driver (aarch64 QEMU `virt`)
 
 ### Status
-The NVMe driver in Redox kernel hangs at namespace enumeration on aarch64
-with GICv3/ITS enabled. The IRQ is never delivered.
+Resolved in-tree (2026-09-29). The NVMe driver hung at namespace
+enumeration on aarch64 QEMU `virt` because it relied on interrupt delivery
+that never arrived. Fixed by executor poll mode plus DMA fences on the queue
+doorbells, in `platform/patches/aarch64/nvmed-aarch64-poll-fence.patch`.
+
+Two corrections to what this section previously claimed:
+
+- The driver is **userspace**, in `base.git/drivers/storage/nvmed`, not in
+  the Redox kernel. The fix is a userspace patch, so it does not conflict
+  with ADR-001.
+- GICv3/ITS was **not** the cause and is **not** a workaround. It was tried as
+  one while the hang was still open and never verified either way. Running the
+  boot test with `--gic-v3` now makes userspace crash outright: `ls` and `cat`
+  die with `UNHANDLED EXCEPTION ... synchronous_exception_at_el0` and a
+  guard-page fault, reproducible locally. Without `--gic-v3` the same image
+  passes every milestone.
 
 ### Impact
-- aarch64 image cannot boot to login prompt
-- Edge AI OS on aarch64 cannot start
+None on the default configuration. `ai-edge` aarch64 boots to a login prompt
+and an interactive shell, and the headless canary passes.
 
-### Workaround
-Use `-machine virt,gic-version=3,its=on,iommu=smmuv3` in QEMU (partial fix,
-still hangs at namespace enumeration)
+### The first version of this fix corrupted memory (found and fixed 2026-09-30)
 
-### To fix
-Requires upstream fix in Redox kernel's NVMe driver for GICv3/ITS support.
+The poll-mode wakeup was originally written as:
+
+```ignore
+let waiters: Vec<_> = self.external_event.borrow_mut().drain().collect();
+for (_, (task, flags_ptr)) in waiters {
+    unsafe { flags_ptr.as_ptr().write(EventFlags::READ) };
+    enqueue::<Hw>(task);
+}
+```
+
+That is a use-after-free. `flags_ptr` points *into* the caller's
+`ExternalEventHandle`, and an entry may only be removed by that handle's own
+`Drop`. Draining removed every entry out from under the still-live handles, so
+`Drop`'s `remove` became a no-op: the map forgot the waiter while the queued
+task still held a pointer into it. Once the handle was freed, the queued task
+wrote to recycled memory.
+
+The symptom looked nothing like a memory bug. The image booted fine, the canary
+passed, and the corruption showed up as **unrelated processes dying
+intermittently**. The DMA fences are unrelated to this — they were never wrong;
+the poll mode that fixed the hang introduced the corruption, trading a
+deterministic hang for silent cross-process memory damage.
+
+The fix snapshots `external_event`'s keys and looks each entry up, leaving
+removal to `Drop`. `enqueue` already dedupes on `ready_link`, so re-notifying
+every 10ms is harmless.
+
+`security/tests/nvmed_patch.rs` fails on a reintroduced `drain()` so this
+cannot come back silently.
+
+**Why the boot canary did not catch it:** `cat` is only invoked after login, and
+a single `cat` succeeds most of the time. A canary that checks "did it reach a
+login prompt" walks straight past it. The failure rate only shows up when the
+same command is repeated inside one boot.
+
+### The `drain()` fix did not eliminate the corruption
+
+Measuring it properly, with
+`platform/scripts/test-aarch64-stability.sh` (10 repeats of `ls` and `cat` in a
+single boot), both before and after:
+
+| build | `ls` ok | `ls` crashes | `cat` ok | `cat` crashes |
+| --- | --- | --- | --- | --- |
+| with the `drain()` | — | — | 2/6 | 4 |
+| after the fix | 8/10 | 2 | 8/10 | 1 |
+
+The UAF was a genuine bug and fixing it roughly halved the crash rate, but
+**aarch64 is still corrupting memory**. A 6-repeat run that came back 6/6 was a
+small sample, not the fix working; at an 80% success rate, 6/6 has a ~26%
+chance of happening by luck. Treat 6/6 as noise, not as a verdict.
+
+The remaining faults are a data abort on the process's own stack pointer:
+
+```
+ESR_EL1: 0000000092000007     # data abort from a lower EL, access flag fault
+SP_EL0:  00007FFFFFFFC990
+  00007fffffffc990: GUARD PAGE
+UNHANDLED EXCEPTION ... NAME /usr/bin/ls
+```
+
+The fault address equals `SP_EL0`, so the process faults writing its own stack
+— that is stack overflow, not a wild pointer. Since it is intermittent on
+identical commands, the likely cause is the poll timer firing every 10ms while
+unrelated processes are running, and the interaction is still unexplained.
+
+This is an open aarch64 userspace/kernel bug, not a solved one. Do not claim
+aarch64 memory safety. `test-aarch64-stability.sh` is the gate: it must go
+10/10 with zero crashes before the claim is revisited.
+
+### Known limitation
+`--gic-v3` is retained in `test.sh` as an option, but the aarch64 CI job no
+longer uses it, because under GICv3/ITS this image cannot reach the milestones
+it is meant to verify.
+
+### `virtio-netd` cannot start on aarch64 (separate, unrelated)
+`virtio-netd` aborts on every boot, before the NVMe fix is even relevant:
+
+```
+panicked at drivers/pcid/src/driver_interface/irq_helpers.rs:320:
+not implemented: virtio: MSI-X is not implemented on this architecture
+```
+
+This is a distinct pre-existing gap — aarch64 lacks MSI-X support in Redox's
+PCID layer, so the emulated e1000/virtio NIC has no way to deliver interrupts.
+It is *not* the memory corruption above, and it is what likely produced the
+`netstack` failures previously blamed on NVMe. Networking in-guest is
+consequently untested; see the ROADMAP TCP gap.
+
+### To fix GICv3/ITS userspace crashes
+Not addressed. Diagnosing why coreutils faults under GICv3/ITS is upstream
+work on the Redox aarch64 userspace; per ADR-014 nothing is sent upstream, so
+this is recorded and left alone.

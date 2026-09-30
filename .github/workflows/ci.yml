@@ -168,12 +168,33 @@ jobs:
       # (no QEMU binary, no UEFI firmware), which is a broken environment and
       # must not be reported as a booting image either.
       #
+      # No --gic-v3. It was carried over from when the NVMe hang was still open
+      # and it was assumed to help, but it was never verified. With it this
+      # image cannot reach the milestones it is meant to check: `ls` and `cat`
+      # die with an unhandled exception and a guard-page fault, which is what
+      # made this job fail. Reproduced locally; see
+      # docs/gotchas/security-isolation.md.
+      #
       # LOGIN_DELAY has to cover boot plus the serial login, and TCG on a
-      # runner is slower than a workstation; --gic-v3 adds more. The default in
-      # test.sh is 120s, which left the login commands racing the prompt here.
-      - name: Run aarch64 boot test (with GICv3/ITS)
+      # runner is slower than a workstation. The default in test.sh is 120s,
+      # which left the login commands racing the prompt here.
+      - name: Run aarch64 boot test
         run: |
-          LOGIN_DELAY=200 ./platform/scripts/test.sh -a aarch64 -c ai-edge --gic-v3 -t 600
+          LOGIN_DELAY=200 ./platform/scripts/test.sh -a aarch64 -c ai-edge -t 600
+
+      # The boot canary above cannot see memory corruption: a single `cat`
+      # succeeds most of the time even on a broken image. This repeats each
+      # command in one boot and requires every repeat to succeed, which is the
+      # only way the rate shows up. Known to fail today (8/10 on 2026-09-30) --
+      # it is wired in as `continue-on-error` so it reports the real number
+      # instead of being quietly omitted, and it becomes a hard gate once
+      # aarch64 memory safety is actually fixed. See
+      # docs/gotchas/security-isolation.md.
+      - name: Run aarch64 stability test (expected to fail)
+        continue-on-error: true
+        run: |
+          LOGIN_DELAY=200 ./platform/scripts/test-aarch64-stability.sh \
+            -c ai-edge -n 10 -t 900
 
       - name: Upload aarch64 boot log
         if: always()
@@ -181,4 +202,4 @@ jobs:
         with:
           name: aarch64-boot-log
           if-no-files-found: warn
-          path: /tmp/aios-boot-*.log
+          path: /tmp/aios-*.log
