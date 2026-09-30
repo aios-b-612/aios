@@ -43,8 +43,7 @@ fn repo_root() -> PathBuf {
 
 fn patch_text() -> String {
     let path = repo_root().join("platform/patches/aarch64/nvmed-aarch64-poll-fence.patch");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
 /// Only lines the patch adds (`+`) or adds as context; `-` lines describe the
@@ -63,7 +62,10 @@ fn poll_timer_body(patch: &str) -> String {
         .unwrap_or_else(|| panic!("patch no longer contains on_poll_timer; update this test"));
     patch[start..]
         .lines()
-        .take_while(|l| !l.trim_start().starts_with("pub fn has_outstanding_commands"))
+        .take_while(|l| {
+            !l.trim_start()
+                .starts_with("pub fn has_outstanding_commands")
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -103,8 +105,7 @@ fn wakeup_releases_the_borrow_before_writing_through_the_pointer() {
     // owning handle is alive. It is read out of the map, the `RefCell` borrow is
     // released, and only then is the pointer written through.
     assert!(
-        added.contains("borrow()\n")
-            || added.contains(".borrow()\n"),
+        added.contains("borrow()\n") || added.contains(".borrow()\n"),
         "expected the waiter snapshot to read out of a scoped borrow"
     );
     assert!(
@@ -159,9 +160,10 @@ fn completion_reads_are_acquire_ordered() {
 fn poll_mode_is_documented_as_breaking_userspace_on_this_image() {
     // Not a code assertion: this records a hard-won fact that is otherwise only in
     // a comment, and that test.sh relies on.
-    let test_sh =
-        std::fs::read_to_string(repo_root().join("platform/scripts/test.sh")).expect("read test.sh");
-    let ci = std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("read ci");
+    let test_sh = std::fs::read_to_string(repo_root().join("platform/scripts/test.sh"))
+        .expect("read test.sh");
+    let ci =
+        std::fs::read_to_string(repo_root().join(".github/workflows/ci.yml")).expect("read ci");
 
     // Only real invocations count; the comment explaining why it is absent must
     // still be allowed to name the flag.
@@ -184,9 +186,8 @@ fn poll_mode_is_documented_as_breaking_userspace_on_this_image() {
 
 #[test]
 fn the_profile_ships_coreutils() {
-    let toml =
-        std::fs::read_to_string(repo_root().join("platform/config/aarch64/ai-edge.toml"))
-            .expect("read ai-edge.toml");
+    let toml = std::fs::read_to_string(repo_root().join("platform/config/aarch64/ai-edge.toml"))
+        .expect("read ai-edge.toml");
 
     assert!(
         toml.contains("coreutils"),
