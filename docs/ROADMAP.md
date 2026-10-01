@@ -151,19 +151,19 @@ não foi simbolizado porque a base de carregamento (PIE, runtime) continua
 desconhecida — ver `gotchas/security-isolation.md` para os PCs e os dois
 caminhos baratos para fechar isso.
 
-**Pista mais forte até agora — `libonig` (2026‑09‑30)**: o dump traz
-`RDX = R8 = 0x8e5b8`, que é exatamente o `memsz` do primeiro segmento `LOAD` do
-`libonig.so.5.5.0` (nenhuma outra biblioteca bate: `libc.so.6` = `0x276354`,
-`libgcc_s.so.1` = `0x1e764`), e `R11` decodifica para o ASCII `/libonig`, cauda
-de `/lib/libonig.so.5`. Ou seja, o código que faultou estava trabalhando com a
-imagem do Oniguruma. Combinando com o endereço do fault, é um **write past the
-end de um buffer do tamanho do libonig** (`0x1bf0000` + `0x8e5b8` = `0x1c7e5b8`;
-o write foi para `0x1c88000`). O `libonig` entra no `uutils` pelo crate `onig`
-(via `expr`), é `DT_NEEDED` do `coreutils` nas **duas** arquiteturas, e **não há
-feature de cargo para removê‑lo**. Isso **não** explica tudo — `ls` é 10/10 e
-também linka libonig, e no aarch64 crasham binários que não passam por `expr` —
-mas é o próximo experimento concreto: rebuild do `uutils` sem o oniguruma do
-`expr`, e ver se `cat` ainda falha.
+**Pista definitiva — bug no dynamic loader do relibc (2026‑10‑01)**: o dump do
+crash de `expr` (que usa `libgcc_s.so.1`) ocorre no **mesmo `RIP` (`0xd85e69`)**
+do crash de `cat` (que usa `libonig.so.5`), com o mesmo padrão write‑past‑end:
+`RDX = R8` = `p_memsz` da biblioteca (`0x8e5b8` para libonig, `0x1e764` para
+libgcc_s), `R11` aponta para o nome da biblioteca (`/libonig` vs `/libgcc_`),
+e `RAX + RDI` = endereço do fault exatamente no fim do mapping + offset. O
+código que faulta é **o mesmo** (`ld_so/dso.rs::mmap_and_copy`) processando
+duas bibliotecas diferentes. Isso confirma que o bug está no **dynamic loader do
+relibc**, não no `uutils` nem no `libonig` especificamente. Suspeitos principais:
+o acúmulo de bounds em `dso.rs:564-591` e a escolha de range PIE‑vs‑fixo em
+`dso.rs:666-672`. **Ainda não provado** — falta a base de carregamento para
+mapear o `RIP` em `ld64.so.1`; confirmar com `addr2line` ou com asserção de
+bounds no `mmap_and_copy`.
 
 **Causa raiz quase certamente no dynamic loader do relibc (2026‑09‑30)**: o
 `libonig.so.5.5.0` tem `p_memsz == p_filesz == 0x8e5b8` no primeiro `PT_LOAD`, e

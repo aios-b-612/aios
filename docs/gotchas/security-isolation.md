@@ -456,8 +456,8 @@ This is the conclusion the register evidence actually supports, and it is a
 much more specific claim than anything above.
 
 `libonig.so.5.5.0`'s first `PT_LOAD` has `p_memsz == p_filesz == 0x8e5b8`.
-relibc's loader contains exactly one place that holds that number, and a library
-path, at the same time — `ld_so/dso.rs`:
+relibc's loader contains exactly one place that holds that number and a library
+path at the same time — `ld_so/dso.rs`:
 
 ```rust
 fn mmap_and_copy<'a>(
@@ -486,6 +486,25 @@ prime suspects inside `mmap_and_copy` are the bounds accumulation
 (`dso.rs:564-591`, which takes `vaddr + vsize` into a running max) and the
 PIE-vs-fixed range selection at `dso.rs:666-672`, which uses `p_vaddr` directly
 for PIE objects but subtracts the mapping base otherwise.
+
+**Smoking gun — `expr` crash confirms the general loader bug (2026-10-01):**
+Running `expr 999999 + 1` (which exercises the `expr` binary that links
+`libgcc_s.so.1`) produced a crash at the **exact same RIP (`0xd85e69`)** with
+the identical write-past-end pattern, but for `libgcc_s.so.1` instead of
+`libonig`:
+
+| Field | `cat` crash (libonig) | `expr` crash (libgcc_s) |
+|-------|----------------------|------------------------|
+| `RIP` | `0xd85e69` | **`0xd85e69`** (identical) |
+| Fault address | `0x1c88000` | `0x1cca000` |
+| `RAX + RDI` | `0x1bf0000 + 0x98000 = 0x1c88000` | `0x1caa000 + 0x20000 = 0x1cca000` |
+| `RDX = R8` | `0x8e5b8` (= `libonig` p_memsz) | `0x1e764` (= `libgcc_s` p_memsz) |
+| `R11` decodes to | `/libonig` | `/libgcc_` (→ `libgcc_s.so.1`) |
+
+Both crashes are **write-past-end of a DSO mapping** in the **same instruction**
+(`0xd85e69`), triggered while mapping **different libraries** (`libonig.so.5`,
+`libgcc_s.so.1`). The faulting code is unequivocally inside
+`relibc`'s `ld_so/dso.rs::mmap_and_copy`.
 
 This finally explains the parts that did not fit before:
 
