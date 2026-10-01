@@ -495,7 +495,7 @@ mod tests {
         let out = scaffold(&nested, "myapp", "minimal").unwrap();
 
         let manifest = ProjectManifest::load(out.project_dir.join("project.toml")).unwrap();
-        for (_, spec) in &manifest.dependencies {
+        for spec in manifest.dependencies.values() {
             if let crate::project::DependencySpec::Path { path } = spec {
                 let resolved = out.project_dir.join(path).join("Cargo.toml");
                 assert!(
@@ -627,7 +627,7 @@ mod tests {
 
         let manifest = ProjectManifest::load(out.project_dir.join("project.toml")).unwrap();
         let mut checked = 0;
-        for (_, spec) in &manifest.dependencies {
+        for spec in manifest.dependencies.values() {
             if let crate::project::DependencySpec::Path { path } = spec {
                 assert!(
                     out.project_dir.join(path).join("Cargo.toml").is_file(),

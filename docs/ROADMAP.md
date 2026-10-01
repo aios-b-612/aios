@@ -70,11 +70,13 @@ no runner sem display, que é a configuração que de fato importa.
 
 **Entregas**:
 - [x] Construir/incluir toolchain Rust self-hosted no perfil `ai-developer` (receitas `rust`, cargo, rustfmt, clippy; avaliar `rust-analyzer`).
-- [ ] `dev` CLI (crate userspace) — `dev new/build/run/test/check/fmt/doctor`.
-- [ ] Templates de projeto com `project.toml`.
-- [ ] `dev doctor` com checagem de: Rust, Cargo, Git, filesystem, network, CPU, RAM, AI runtime, models, storage, toolchains, targets, edge SDK.
+- [x] `dev` CLI (crate userspace) — `dev new/build/run/test/check/fmt/doctor`. **Verificado no host** (2026‑09‑30), não só no código: `new` gera projeto com `project.toml` nos 4 templates (`minimal`, `edge‑service`, `agent`, `classifier`); `check` compila o projeto gerado; `test`, `build`, `run` e `fmt` executam; `doctor` reporta as 13 checagens.
+- [x] Templates de projeto com `project.toml`.
+- [x] `dev doctor` com checagem de: Rust, Cargo, Git, filesystem, network, CPU, RAM, AI runtime, models, storage, toolchains, targets, edge SDK.
 
-**Critério**: executar `cargo build` e `cargo test` de um template dentro do OS; `dev doctor` reporta tudo OK/permitido. — *primeira parte bloqueada pela estabilidade upstream sob QEMU/KVM (§2.15).*
+**Nota de nomenclatura**: o binário chama‑se `aios-dev` (igual a `aios-deploy` e `aios-security`). O `prompt.md` original usava `dev`, mas o código imprimia `aios-dev` em todo o help e no "next steps" — seguir a própria instrução falhava com *command not found*. Renomeado o binário para `aios-dev` em 2026‑09‑30; nada no repo dependia do nome antigo.
+
+**Critério**: executar `cargo build` e `cargo test` de um template dentro do OS; `dev doctor` reporta tudo OK/permitido. — **ATINGIDO no host, ainda NÃO dentro do OS**: falta a execução in‑guest, bloqueada pela estabilidade upstream sob QEMU/KVM (§2.15) e pelo blocker de sysroot do `rustc` via `dladdr` (relibc).
 
 ---
 
@@ -132,8 +134,9 @@ no runner sem display, que é a configuração que de fato importa.
 
 **Status (2026‑09‑30)**: o `ai-edge` aarch64 **boots**, mas **não está validado** — e a alegação anterior de validação (2026‑09‑29) era falsa. O build completa e chega a `login:`, porém há falhas intermitentes: `platform/scripts/test-stability.sh` mediu 8/10 e 6/10 em dois runs aarch64. O experimento de controle mostrou **9/10 também em x86_64, sem nenhum patch**, então a causa **não** é o fix do `nvmed` — é um bug pré‑existente do Redox. Um UAF real no `nvmed` foi corrigido no mesmo período, mas não era a causa.
 
-Diagnóstico posterior (mesmo dia): a falha **não é dos `uutils` nem um estouro de pilha**. Binários nativos do Redox (`find`, `df`, `free`, `uptime`) e do `userutils` (`id`) crasham na mesma taxa; os registradores decodificados mostram aborts de dados em endereços quase‑nulos (`FAR_EL1` `0x4`, `0xd`, `0x103010`), não no topo da pilha, e as linhas `GUARD PAGE` são o mapa de pilha que o Redox imprime junto dos registradores. O caminho de erro do `cat` (que nunca abre arquivo) falha tanto quanto o caminho de trabalho, então o fault é precoce — mas `which` e `true`, que compartilham o loader e o crate com binários que crasham, nunca falharam, então não é o startup do `ld.so`. Já foram eliminados: `uutils`, estouro de pilha, Rust‑específico, puramente estático‑vs‑dinâmico, `clap`, patch de NVMe, e corrida de grants de memória. `test-stability.sh` agora falha com **qualquer** unhandled exception, não só `ls`/`cat`. Causa raíz em aberto: exige debugger no guest para simbolizar o PC de usuário, não mais execuções black‑box. Ver `gotchas/security-isolation.md`. Pendente também a validação TCP in‑guest. O alvo de runtime
-validado em x86_64 continua sendo o perfil `ai-developer` (perfil sem GUI); o aarch64 permanece como alvo de deploy futuro.
+Diagnóstico posterior (mesmo dia): a falha **não é dos `uutils` nem um estouro de pilha**. Binários nativos do Redox (`find`, `df`, `free`, `uptime`) e do `userutils` (`id`) crasham na mesma taxa; os registradores decodificados mostram aborts de dados em endereços quase‑nulos (`FAR_EL1` `0x4`, `0xd`, `0x103010`), não no topo da pilha, e as linhas `GUARD PAGE` são o mapa de pilha que o Redox imprime junto dos registradores. O caminho de erro do `cat` (que nunca abre arquivo) falha tanto quanto o caminho de trabalho, então o fault é precoce — mas `which` e `true`, que compartilham o loader e o crate com binários que crasham, nunca falharam, então não é o startup do `ld.so`. Já foram eliminados: `uutils`, estouro de pilha, Rust‑específico, puramente estático‑vs‑dinâmico, `clap`, patch de NVMe, e corrida de grants de memória. `test-stability.sh` agora falha com **qualquer** unhandled exception, não só `ls`/`cat`. Causa raíz em aberto: exige debugger no guest para simbolizar o PC de usuário, não mais execuções black‑box. Ver `gotchas/security-isolation.md`. Pendente também a validação TCP in‑guest.
+
+**Decisão de alvo (2026‑09‑30)**: o `aarch64` está **declarado bloqueado** — a causa raiz é upstream (relibc/kernel) e não é endereçável dentro deste projeto; continuar com execuções black‑box já não produz informação nova. O `aarch64` deixa de ser alvo de runtime e vira apenas alvo de deploy futuro, condicionado a uma correção upstream. O **x86_64 é promovido a alvo de runtime**, com o perfil `ai-developer` (sem GUI). Ressalva honesta: x86_64 **não está comprovadamente estável** — um controle deu `cat 9/10` — a promoção é uma decisão de projeto para seguir em frente, não um atestado de estabilidade. Nenhum dos dois perfis passa de `10/10` limpo no `test-stability.sh`.
 
 ---
 
@@ -172,6 +175,16 @@ que é explicitamente sobre RPi 3B+ real:
 O que seria necessário para fechar: um RPi 3B+ com fonte e cartão SD, o
 `redox_firmware` correspondente, e rodar a sequência U-Boot → kernel → console
 UART → `edge status` pela rede local.
+
+**Ponto de partida em software (verificado 2026‑09‑30)**: o upstream já traz
+`redox-os/config/aarch64/raspi3bp/minimal.toml` (estende `minimal.toml`,
+`filesystem_size=256`, `efi_partition_size=128`) — é a base do item 2. Ressalva
+honesta: o checkout local do kernel em `redox-os/recipes/core/kernel/source` está
+desatualizado/parcial (layout antigo em `src/devices/`, sem `src/drivers/`), então
+**não foi possível confirmar de fonte** a alegação de que o driver SDHCI do Redox
+cobre apenas `brcm,bcm2835-sdhci`. Tratar como não‑verificado até conferir o
+kernel no tag correto. O `RPi 3B+` (BCM2835) segue sendo o board mais viável;
+Pi 4 e Pi 5 dependem de drivers que não existem.
 
 ---
 

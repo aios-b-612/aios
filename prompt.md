@@ -516,17 +516,17 @@ Cota/uso de IA na interface (padrão):
 
 Criar CLI:
 
-dev
+aios-dev
 
 Comandos:
 
-dev new
-dev build
-dev run
-dev test
-dev check
-dev fmt
-dev doctor
+aios-dev new
+aios-dev build
+aios-dev run
+aios-dev test
+aios-dev check
+aios-dev fmt
+aios-dev doctor
 
 ---
 
@@ -571,7 +571,7 @@ device = "raspberry-pi"
 
 Criar:
 
-dev doctor
+aios-dev doctor
 
 Verificar:
 
@@ -1148,7 +1148,7 @@ Rust
 Cargo
 Git
 dev CLI
-dev doctor
+aios-dev doctor
 project templates
 
 ---

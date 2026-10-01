@@ -10,7 +10,7 @@ name = "aios_dev"
 path = "src/lib.rs"
 
 [[bin]]
-name = "dev"
+name = "aios-dev"
 path = "src/main.rs"
 
 [dependencies]
