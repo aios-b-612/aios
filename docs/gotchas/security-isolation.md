@@ -450,6 +450,65 @@ concrete, bounded experiments follow from this:
 
 Experiment 1 is the higher-value one and is the next thing to try.
 
+### The fault is almost certainly inside relibc's dynamic loader
+
+This is the conclusion the register evidence actually supports, and it is a
+much more specific claim than anything above.
+
+`libonig.so.5.5.0`'s first `PT_LOAD` has `p_memsz == p_filesz == 0x8e5b8`.
+relibc's loader contains exactly one place that holds that number, and a library
+path, at the same time — `ld_so/dso.rs`:
+
+```rust
+fn mmap_and_copy<'a>(
+    path: &str,                          // <- R11 points into "/lib/libonig.so.5"
+    ...
+) {
+    log::trace!("# {}", path);
+    ...
+    // in the PT_LOAD copy loop:
+    let _vsize = ((ph.p_memsz(endian) + _voff) as usize)
+        .next_multiple_of(ph.p_align(endian) as usize);
+    log::trace!("  copy {:#x}, {:#x}: {:#x}, {:#x}", ..., _vsize, _voff, obj_data.len());
+    mmap_data.copy_from_slice(obj_data);
+}
+```
+
+`obj_data.len()` is the segment's file size, also `0x8e5b8`. So `p_memsz` and
+the copy length are live simultaneously as `0x8e5b8` — which is what
+`RDX = R8 = 0x8e5b8` looks like — while `path` is the string `R11` indexes into.
+The fault address `0x1c88000` is `0x9a48` past the end of a `0x8e5b8`-long
+region, i.e. a **write past the end of a DSO mapping**.
+
+So the working hypothesis is now: **`ld.so` mis-sizes or mis-bounds a DSO
+mapping while loading `libonig.so`, and the copy runs off the end of it.** The
+prime suspects inside `mmap_and_copy` are the bounds accumulation
+(`dso.rs:564-591`, which takes `vaddr + vsize` into a running max) and the
+PIE-vs-fixed range selection at `dso.rs:666-672`, which uses `p_vaddr` directly
+for PIE objects but subtracts the mapping base otherwise.
+
+This finally explains the parts that did not fit before:
+
+- **It is not `uutils`-specific.** Every dynamically-linked binary goes through
+  this loader code for its own libraries, which is why native `find`, `df`,
+  `free`, `uptime` and `userutils` `id` crash on aarch64 too.
+- **It is not Rust-specific and not `clap`-specific**, for the same reason.
+- **It is upstream**, in relibc rather than in this meta-repo — consistent with
+  ADR-014 and with the decision to stop spending black-box runs on aarch64.
+
+**Still not proven.** Pinning the exact line needs the load base, so `RIP` and
+the eight stack-frame PCs can be mapped to file offsets in `ld64.so.1`; that
+step is still open (see the two cheap routes above). Until then this is a
+well-evidenced location, not a confirmed line. What would confirm it: an
+`addr2line` on the offset, or a rebuild of relibc with a bounds assertion in
+`mmap_and_copy` that trips instead of faulting.
+
+The unexplained residue is the `ls` 10/10 vs `cat` 9/10 split — both link
+libonig and both run the same loader. Candidates worth keeping in mind: the
+crash may depend on which libraries a given command pulls in transitively, or
+on the memory layout at load time rather than on the command's own logic. That
+part is still open.
+
 
 This is an open, pre-existing Redox bug. It is aarch64's real blocker, and
 because it reproduces on x86_64 it also puts that earlier "x86_64 fully

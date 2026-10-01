@@ -165,6 +165,22 @@ também linka libonig, e no aarch64 crasham binários que não passam por `expr`
 mas é o próximo experimento concreto: rebuild do `uutils` sem o oniguruma do
 `expr`, e ver se `cat` ainda falha.
 
+**Causa raiz quase certamente no dynamic loader do relibc (2026‑09‑30)**: o
+`libonig.so.5.5.0` tem `p_memsz == p_filesz == 0x8e5b8` no primeiro `PT_LOAD`, e
+existe exatamente um lugar no loader que mantém esse número e o path da
+biblioteca ao mesmo tempo — `ld_so/dso.rs::mmap_and_copy(path: &str, …)`, cujo
+`log::trace!("# {}", path)` casa com `R11`, e cujo `p_memsz` + `obj_data.len()`
+casam com `RDX = R8 = 0x8e5b8`. O fault `0x1c88000` fica `0x9a48` além do fim
+de uma região de `0x8e5b8`, ou seja, **write past the end de um mapping de
+DSO**. Isso explica de uma vez o que não fechava antes: não é `uutils`‑específico
+(todo binário dinamicamente linkado passa por esse loader, e é por isso que
+`find`/`df`/`free`/`uptime`/`id` nativos também crasham no aarch64), não é
+Rust‑específico, e é **upstream** (relibc), coerente com o ADR‑014. Suspeitos
+principais: o acúmulo de bounds em `dso.rs:564-591` e a escolha de range
+PIE‑vs‑fixo em `dso.rs:666-672`. **Ainda não provado** — falta a base de
+carregamento para mapear o `RIP` em `ld64.so.1`; confirmar com `addr2line` ou
+com uma asserção de bounds no `mmap_and_copy`.
+
 ---
 
 ## FASE 6 — RASPBERRY PI
