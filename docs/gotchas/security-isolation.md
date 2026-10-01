@@ -222,38 +222,118 @@ noise, not as a verdict.
 **The control run settles it: x86_64, which never applies this patch, also
 crashes** (9/10, one guard-page fault, same signature). So the corruption is
 **not** caused by the NVMe patch, the poll mode, or the DMA fences. The `drain()`
-UAF was a real bug worth fixing on its own merits, but it is not this bug, and
-fixing it roughly halved aarch64's crash rate for reasons not yet understood.
+UAF was a real bug worth fixing on its own merits, but it is not this bug. Any
+apparent improvement in the aarch64 rate after the fix was sampling noise at
+this crash rate, not an effect of the fix.
 
-The fault is a data abort on the process's own stack pointer, on both
-architectures:
+### The fault is a wild/near-null pointer dereference, not a stack overflow
+
+An earlier revision of this document called these stack overflows inside the
+`uutils` binaries. That was wrong, and both halves of the claim are now refuted.
+
+**It is not `uutils`.** Binaries from other crates fail at the same rate. Across
+seven further runs, six invocations each of seven commands, every one of the ten
+exceptions in the log was attributable to one of those commands:
+
+| binary | link | crate | crashes |
+| --- | --- | --- | --- |
+| `uptime` | dynamic | native coreutils | 4/6 |
+| `id` | dynamic | userutils | 3/6 |
+| `free` | dynamic | native coreutils | 2/6 |
+| `df` | dynamic | native coreutils | 1/6 |
+| `cat` | dynamic | `uutils` | 3/10 |
+| `wc` | dynamic | `uutils` | 3/8 |
+| `basename` | dynamic | `uutils` | 2/8 |
+| `find` | dynamic | findutils | 3/8, then 2/12 |
+| `which` | dynamic | native coreutils | **0/6** |
+| `true` | dynamic | `uutils` | **0/13** |
+| `grep` | static | extrautils | 0/10 |
+| `calc` | static | extrautils | 0/4 |
+| `tar` | static | extrautils | 0/8 |
+
+`ion` has no `true` builtin, so `true` really is a spawned process; and `df`,
+`free`, `uptime` and `which` are separate binaries from the *same* crate and the
+same link mode. The split is not between crates.
+
+**It is not a stack overflow.** Decoding the register dumps of the `find`
+crashes shows data aborts on near-null and wild addresses:
 
 ```
-# aarch64
-ESR_EL1: 0000000092000007     # data abort from a lower EL
-SP_EL0:  00007FFFFFFFC990
-  00007fffffffc990: GUARD PAGE
-UNHANDLED EXCEPTION ... NAME /usr/bin/ls
-
-# x86_64
-FP 00007fffffffe7b0: PC 0000000000db8138
-kernel::arch::x86_shared::interrupt::exception::page::inner
-  00007fffffffe7b0: GUARD PAGE
-UNHANDLED EXCEPTION ... NAME /usr/bin/cat
+ESR_EL1: 0000000092000007   # data abort, lower EL; translation fault L1; READ
+FAR_EL1:  0x4                # a second occurrence faults at 0xd
+ESR_EL1: 00000000F2000001   # data abort, lower EL; translation fault L0; WRITE
+FAR_EL1:  0x103010
+ELR_EL1: 00000000002A4E2C    # kernel text, not the faulting process
+kernel::arch::aarch64::interrupt::exception:ERROR -- FATAL:
+  Not an SVC induced synchronous exception
 ```
 
-The faulting address is always the top of the process's own stack, so these are
-**stack overflows inside the `uutils` binaries**, not wild pointers from another
-process. The binaries come from `recipes/core/uutils/recipe.toml` (`coreutils`
-0.11.0), whose recipe already carries a standing TODO about a Redox-specific
-locale init bug involving `OnceLock` plus `thread_local`. Recursion depth or
-thread stacks in those binaries, not NVMe, is where to look next.
+The `GUARD PAGE` lines in the dumps are part of Redox's own stack map, printed
+alongside the registers; they are not the faulting address. A stack overflow
+faults at a stack address near the top of the mapped region, not at `0x4`. The
+kernel then faults in kernel mode while handling the user-space abort. The
+`Lacks grant` line that precedes it is expected: page 0 has no grant, so it is a
+consequence of the null deref rather than a grant race.
+
+**It is not the tools' work, and not early startup.** Splitting a run at
+sentinel markers:
+
+| path | crashes |
+| --- | --- |
+| `cat --zzz-invalid-flag` (parse, print, exit — never touches a file) | 5/10 |
+| `cat /etc/ai-platform` (full work) | 4/10 |
+| `true` (control) | 0/5 |
+
+The error path fails as often as the real one, so the fault is early. But
+`which` and `true` survive 19 invocations between them while sharing the loader
+and the crate with binaries that crash, so it is not `ld.so` startup either.
+
+### Hypotheses already eliminated
+
+Do not re-run these; each was tested and failed.
+
+- **Not `uutils`** — native `find`, `df`, `free`, `uptime` and `id` all crash.
+- **Not a stack overflow** — faults are at `0x4`, `0xd` and `0x103010`.
+- **Not Rust-specific** — every binary tested is Rust, including all the clean
+  ones. `grep`, `tar` and `calc` are statically linked Rust from `extrautils`.
+- **Not static versus dynamic alone** — this held at first (0/22 static versus
+  10/46 dynamic) but `which` and `true` are dynamically linked and never crash.
+  Linkage is at most a contributing factor.
+- **Not `clap`** — `find` crashes and does not depend on `clap`; the clean
+  `extrautils` binaries do not either.
+- **Not the NVMe patch, poll mode or DMA fences** — x86_64 never applies them and
+  still crashes.
+- **Not a memory-grant race** — `Lacks grant` refers to page 0.
+
+### Where to look next
+
+A subset of dynamically-linked userspace binaries fault on a near-null or wild
+pointer roughly a third of the time, and the kernel then faults in kernel mode
+while handling the signal. The most promising untested area is relibc's
+`ld.so` TLS handling, which is aarch64-specific and visibly unfinished:
+`src/ld_so/linker.rs:691-698` carries a `FIMXE` and an unresolved `FIXME` about
+placing the TLS block relative to the thread pointer, while
+`src/ld_so/tcb.rs` hardcodes the first master's TLS offset to `0` on aarch64
+("experimentally determined"). Those two places disagree about where the first
+module's TLS lives, which would matter for any `thread_local!` and matches the
+`OnceLock` plus `thread_local` TODO in `recipes/core/uutils/recipe.toml`. That
+lead is **not confirmed** — the faulting user-space PC was never symbolized,
+because the load base is chosen at runtime and the dump only prints the kernel's
+`ELR_EL1`. Getting it needs a debugger in the guest, not more black-box runs.
+
 
 This is an open, pre-existing Redox bug. It is aarch64's real blocker, and
 because it reproduces on x86_64 it also puts that earlier "x86_64 fully
 validated" claim under suspicion. Do not claim memory safety on either
 architecture. `test-stability.sh` is the gate: 10/10 with zero crashes
 before any such claim.
+
+A note on method, because two intermediate runs looked like clean results and
+were not: one boot stalled after `dmesg` flooded the serial console, so the
+commands queued behind it never ran, and another silently lost the image lock
+and never booted. Only runs where sentinel markers confirmed the whole script
+executed to the end are counted in the table above. Check that the log actually
+grew before trusting a "no crashes" result.
 
 ### Known limitation
 `--gic-v3` is retained in `test.sh` as an option, but the aarch64 CI job no

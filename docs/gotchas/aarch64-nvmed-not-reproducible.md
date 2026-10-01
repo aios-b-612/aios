@@ -224,8 +224,11 @@ directory named `models`, not because any model loaded.
   applied in-tree.** Not validated either, and worse than x86_64: `ls` and
   `cat` fail roughly 1 in 4 to 1 in 3 runs.
 
-Both are limited by the same pre-existing `uutils` stack overflow, not by this
-patch. See `security-isolation.md` and `platform/scripts/test-stability.sh`.
+Both are limited by the same pre-existing Redox bug, not by this patch. It was
+first blamed on a `uutils` stack overflow, but that was wrong: a native Redox
+`find` fails at the same rate, and the split that fits the data is static versus
+dynamic linking. See `security-isolation.md` and
+`platform/scripts/test-stability.sh`.
 A boot canary runs each command once and cannot see an intermittent rate, so
 passing the canary is not evidence of stability.
 

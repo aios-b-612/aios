@@ -4,14 +4,17 @@
 # WHY THIS EXISTS, SEPARATE FROM test.sh
 #
 # test.sh asks "did the image boot?". That question cannot see intermittent
-# crashes. On this image, `uutils` binaries (`ls`, `cat`) intermittently
-# overflow their own stack and take a guard-page fault. A boot canary logs in
-# and runs each command once, so it passes while the underlying rate is roughly
-# 1 failure in 10.
+# crashes. On this image, a subset of dynamically-linked binaries intermittently
+# die on a data abort against a near-null or wild address, after which the kernel
+# also faults while handling the signal. Confirmed in `ls`, `cat`, `wc`,
+# `basename` and in native `find`, `df`, `free`, `uptime` and `id`; `which` and
+# `true` have never been seen to fail. A boot canary logs in and runs each
+# command once, so it passes while the underlying rate is roughly 1 failure in 3.
 #
 # The rate only shows up when the same command is repeated inside a single
 # boot. That is what this script does: it runs each command N times and
-# requires every single one to succeed, with zero unhandled exceptions.
+# requires every single one to succeed, with zero unhandled exceptions in any
+# binary, not just the two it drives.
 #
 # It runs on x86_64 too, and that is the point: the control run proved the
 # crash is NOT caused by the aarch64 NVMe patch, since x86_64 never applies it
@@ -178,11 +181,16 @@ count_crashes() {
 }
 ls_crashes=$(count_crashes "/usr/bin/ls")
 cat_crashes=$(count_crashes "/usr/bin/cat")
+# The fault is not confined to ls/cat: find, df, free, uptime and id all crash at
+# a similar rate. Gate on ANY unhandled exception so a fix cannot pass by only
+# happening to spare the two commands this script happens to run.
+any_crashes=$(grep -ac "UNHANDLED EXCEPTION" "${OUT}" || true)
 guard_pages=$(grep -ac "GUARD PAGE" "${OUT}" || true)
 
 echo
 echo "  ls    ${CMD_LS}    ok ${ls_ok}/${REPEATS}  crashes ${ls_crashes}"
 echo "  cat   ${CMD_CAT}   ok ${cat_ok}/${REPEATS}  crashes ${cat_crashes}"
+echo "  unhandled exceptions in any binary: ${any_crashes}"
 echo "  guard-page faults in console: ${guard_pages}"
 
 ok=1
@@ -190,6 +198,7 @@ ok=1
 [ "${cat_ok}" -eq "${REPEATS}" ] || { echo "  [MISS] ${CAT_MARKER}: ${cat_ok}/${REPEATS}"; ok=0; }
 [ "${ls_crashes}" -eq 0 ] || { echo "  [FAIL] ${ls_crashes} unhandled exception(s) in /usr/bin/ls"; ok=0; }
 [ "${cat_crashes}" -eq 0 ] || { echo "  [FAIL] ${cat_crashes} unhandled exception(s) in /usr/bin/cat"; ok=0; }
+[ "${any_crashes}" -eq 0 ] || { echo "  [FAIL] ${any_crashes} unhandled exception(s) across all binaries"; ok=0; }
 
 if [ "${ok}" -eq 0 ]; then
     echo "RESULT: FAIL (intermittent corruption -- see ${BOOT_LOG})" >&2
