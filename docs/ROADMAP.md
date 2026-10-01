@@ -151,6 +151,20 @@ não foi simbolizado porque a base de carregamento (PIE, runtime) continua
 desconhecida — ver `gotchas/security-isolation.md` para os PCs e os dois
 caminhos baratos para fechar isso.
 
+**Pista mais forte até agora — `libonig` (2026‑09‑30)**: o dump traz
+`RDX = R8 = 0x8e5b8`, que é exatamente o `memsz` do primeiro segmento `LOAD` do
+`libonig.so.5.5.0` (nenhuma outra biblioteca bate: `libc.so.6` = `0x276354`,
+`libgcc_s.so.1` = `0x1e764`), e `R11` decodifica para o ASCII `/libonig`, cauda
+de `/lib/libonig.so.5`. Ou seja, o código que faultou estava trabalhando com a
+imagem do Oniguruma. Combinando com o endereço do fault, é um **write past the
+end de um buffer do tamanho do libonig** (`0x1bf0000` + `0x8e5b8` = `0x1c7e5b8`;
+o write foi para `0x1c88000`). O `libonig` entra no `uutils` pelo crate `onig`
+(via `expr`), é `DT_NEEDED` do `coreutils` nas **duas** arquiteturas, e **não há
+feature de cargo para removê‑lo**. Isso **não** explica tudo — `ls` é 10/10 e
+também linka libonig, e no aarch64 crasham binários que não passam por `expr` —
+mas é o próximo experimento concreto: rebuild do `uutils` sem o oniguruma do
+`expr`, e ver se `cat` ainda falha.
+
 ---
 
 ## FASE 6 — RASPBERRY PI

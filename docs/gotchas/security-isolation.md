@@ -389,6 +389,67 @@ faults in this run. A TLS bug can still be the trigger if the faulting path
 touches a `thread_local` that `ls` never reaches, but it is no longer the
 obvious first suspect.
 
+### `libonig`: the faulting run was actively handling the Oniguruma library
+
+This is the strongest lead so far and it was not on anyone's list, including
+the aarch64 work. The x86_64 register dump happens to contain two values that
+identify a specific shared library beyond coincidence:
+
+- `RDX = R8 = 0x8e5b8`. `libonig.so.5.5.0`'s first `LOAD` segment has
+  `memsz` exactly `0x8e5b8`. No other library on the system matches: `libc.so.6`
+  is `0x276354` and `libgcc_s.so.1` is `0x1e764`. A value appearing in *two*
+  registers is the shape of a length/size operand (a copy, a fill, or a loop
+  bound), so the faulting code was working with the size of libonig's mapped
+  image.
+- `R11 = 0x67696e6f62696c2f`, which little-endian is the ASCII `/libonig` — the
+  tail of the path `/lib/libonig.so.5`, with `R11` pointing at index 4 of it.
+  Code holding a pointer into a library's own pathname is walking the loaded
+  library list.
+
+Put together with the fault address, the picture is a **write past the end of a
+libonig-sized buffer**: the buffer starts at `RAX = 0x1bf0000` and is `0x8e5b8`
+long, so it ends at `0x1c7e5b8`; the write went to `RAX + RDI = 0x1c88000`,
+which is `0x9a48` beyond that end and into a page that is not mapped writable.
+
+`libonig` is the Oniguruma regex engine (C), pulled into `uutils` by the Rust
+`onig` crate:
+
+```
+# recipes/core/uutils/source/Cargo.toml
+onig = { version = "~6.5.1", default-features = false }
+```
+
+It is a `DT_NEEDED` of the `coreutils` binary on **both** architectures
+(`libonig.so.5`, alongside `libgcc_s.so.1` and `libc.so.6`). It arrives via the
+`expr` crate, and unlike `openssl` there is **no cargo feature to drop it** —
+`onig` is a plain workspace dependency.
+
+**What this does and does not explain.** It does not explain everything, and it
+would be wrong to write it up as the root cause:
+
+- It does not discriminate `ls` from `cat`. `ls`, `cat`, `true`, `wc` and
+  `basename` are all symlinks to the *same* `coreutils` binary, so every one of
+  them links libonig — yet `ls` is 10/10. Merely having the library loaded is
+  therefore not sufficient; the trigger is a specific code path.
+- On aarch64 the crash set also includes native `find`, `df`, `free`, `uptime`
+  and `userutils` `id`, which do not go through `expr` and most likely do not
+  link libonig at all. So there is more than one failure mode, or a cause that
+  libonig merely participates in.
+
+**Why it is still worth acting on.** The single multi-call `coreutils` binary
+means `cat` and `ls` carry `expr` and its C regex dependency whether they need
+it or not, which maximises the surface exposed to whatever the fault is. Two
+concrete, bounded experiments follow from this:
+
+1. Rebuild `uutils` with `expr`'s oniguruma dependency stubbed out, and check
+   whether `cat` still faults. If it stops, the dependency is the trigger; if it
+   does not, the dependency is ruled out cheaply. This is a build-time change
+   only — no upstream patch is involved, so ADR-014 is not engaged.
+2. Compare a command that never touches regex against one that does, within the
+   same binary, to see whether regex use correlates with the fault.
+
+Experiment 1 is the higher-value one and is the next thing to try.
+
 
 This is an open, pre-existing Redox bug. It is aarch64's real blocker, and
 because it reproduces on x86_64 it also puts that earlier "x86_64 fully
