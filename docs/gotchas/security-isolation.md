@@ -317,9 +317,77 @@ placing the TLS block relative to the thread pointer, while
 ("experimentally determined"). Those two places disagree about where the first
 module's TLS lives, which would matter for any `thread_local!` and matches the
 `OnceLock` plus `thread_local` TODO in `recipes/core/uutils/recipe.toml`. That
-lead is **not confirmed** — the faulting user-space PC was never symbolized,
-because the load base is chosen at runtime and the dump only prints the kernel's
-`ELR_EL1`. Getting it needs a debugger in the guest, not more black-box runs.
+lead is **not confirmed** — see the x86_64 section below for the hard evidence
+that now supersedes "the user PC was never obtained".
+
+### x86_64 gives the faulting user-space PC (2026-09-30)
+
+The statement above ("getting it needs a debugger in the guest") is now
+**partly obsolete**. The aarch64 dump only prints the kernel's `ELR_EL1`, but the
+**x86_64 page-fault dump includes the user-space `RIP`**, and x86_64 never
+applies the aarch64 NVMe patch. Reproduced with
+`test-stability.sh -a x86_64 -c ai-developer`: `ls` **10/10**, `cat` **9/10**,
+1 unhandled exception in `/usr/bin/cat`, 1 guard-page fault in the console.
+
+That `ls` vs `cat` split is the sharpest discriminator found so far. On x86_64
+`cat`, `ls` and `true` are **all symlinks to the same `uutils` `coreutils`
+binary** (`target/x86_64-unknown-redox/stage/usr/bin/`). One binary, one
+loader, one process startup, two outcomes — so the fault is **not** the loader,
+not TLS setup at startup, and not the binary. It is triggered by the specific
+work `cat` does (open and read a file) and not by `ls` (read a directory).
+
+The captured fault, verbatim from the console:
+
+```
+Page fault: 0000000001C88000 WR | US
+RIP:   0000000000d85e69
+RSP:   00007fffffffe7b0
+FSBASE 0000000000f70000
+RAX:   0000000001bf0000
+RDI:   0000000000098000
+RCX:   0000000000000011
+RDX:   000000000008e5b8
+R11:   67696e6f62696c2f
+```
+
+Read together, `RAX + RDI == 0x1bf0000 + 0x98000 == 0x1c88000` — exactly the
+faulting address. So this is a **userspace write through `base + 0x98000`**
+where the base is `0x1bf0000`, and it is a *write* into a page that is not
+mapped writable. `RDI` is `0x98000` = 608 KiB, which looks like a length or a
+size rather than a small field offset, and `R11` decodes (little-endian) to the
+ASCII bytes `/libonig` — plausibly a fragment of a path being walked. Both
+point at a buffer/length computation rather than a null struct field.
+
+Contrast with aarch64, where the same failure showed `ESR_EL1` reads against
+`0x4`/`0xd` and a write against `0x103010` — near-null. The x86_64 fault is at
+`0x1c88000`, a much less "null" address, so the two may share a root cause
+without sharing a fault address.
+
+**Not yet symbolized, and here is exactly why.** The user PC is a PIE runtime
+address, and the load base is still unknown, so it cannot yet be mapped to a
+file offset. `.text` of the x86_64 `coreutils` spans `0xaa5c0`–`0x7c7232`, which
+pins the base only to `0x796eb2 <= base <= 0xb84925` — too wide to pick an
+instruction. Guessing `0x400000` is refuted: it puts the PC at `0x985e69`,
+which is **past the end of `.text`**. To finish, in order of cost:
+
+1. Rebuild `uutils` for x86_64 with debug info (`[profile.release] strip = false`)
+   and re-run; then the load base plus symbols resolve the PC exactly.
+2. Or attach gdb via the existing `platform/scripts/debug-qemu.sh`
+   (`make gdb-userspace`) and read the base and backtrace live.
+
+The kernel's own stack walk is intact and already gives the call chain as raw
+PCs, innermost first, so once the base is known every frame is recoverable:
+
+```
+0xdb8138  0xd31a7e  0xd31f78  0xd2e12a
+0xd2fc91  0xd09680  0xc2aee5  0xf5e0e4
+```
+
+Note this also weakens the relibc-TLS theory as the *sole* explanation: TLS
+layout is fixed at load time and shared by all three symlinks, yet `ls` never
+faults in this run. A TLS bug can still be the trigger if the faulting path
+touches a `thread_local` that `ls` never reaches, but it is no longer the
+obvious first suspect.
 
 
 This is an open, pre-existing Redox bug. It is aarch64's real blocker, and

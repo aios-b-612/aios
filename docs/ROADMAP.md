@@ -138,6 +138,19 @@ Diagnóstico posterior (mesmo dia): a falha **não é dos `uutils` nem um estour
 
 **Decisão de alvo (2026‑09‑30)**: o `aarch64` está **declarado bloqueado** — a causa raiz é upstream (relibc/kernel) e não é endereçável dentro deste projeto; continuar com execuções black‑box já não produz informação nova. O `aarch64` deixa de ser alvo de runtime e vira apenas alvo de deploy futuro, condicionado a uma correção upstream. O **x86_64 é promovido a alvo de runtime**, com o perfil `ai-developer` (sem GUI). Ressalva honesta: x86_64 **não está comprovadamente estável** — um controle deu `cat 9/10` — a promoção é uma decisão de projeto para seguir em frente, não um atestado de estabilidade. Nenhum dos dois perfis passa de `10/10` limpo no `test-stability.sh`.
 
+**Avanço no diagnóstico (2026‑09‑30, x86_64)**: o dump de page fault do **x86_64
+inclui o `RIP` de userspace**, ao contrário do aarch64 (que só imprime `ELR_EL1`),
+e o x86_64 nunca aplica o patch de NVMe. `test-stability.sh -a x86_64
+-c ai-developer` reproduziu `ls` **10/10** e `cat` **9/10**. Como `cat`, `ls` e
+`true` são **symlinks para o mesmo binário** `uutils/coreutils`, o loader, o
+startup e o binário ficam descartados de uma vez: o gatilho é o trabalho
+específico de `cat` (abrir e ler arquivo). O fault capturado é um **write em
+userspace** com `RAX + RDI` == endereço do fault (`0x1bf0000 + 0x98000 =
+0x1c88000`), `RDI` = 608 KiB e `R11` decodificando para `/libonig`. O PC ainda
+não foi simbolizado porque a base de carregamento (PIE, runtime) continua
+desconhecida — ver `gotchas/security-isolation.md` para os PCs e os dois
+caminhos baratos para fechar isso.
+
 ---
 
 ## FASE 6 — RASPBERRY PI
