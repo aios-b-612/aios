@@ -27,6 +27,7 @@ usage:
   edge status
   edge models
   edge run <model> [--prompt TEXT] [--max-tokens N] [--json]
+  edge chat <model> [--prompt TEXT] [--max-tokens N] [--json]
   edge benchmark [--model M] [--tokens N]
   edge logs [--tail N]
   edge monitor [--json]
@@ -36,6 +37,7 @@ usage:
   edge devices
   edge deploy <model.gguf> --device <id|name> [--name NAME] [--force] [--no-verify]
   edge update --device <id|name> --model <file.gguf>
+  edge ci-monitor [--url URL] [--interval SECS] [--once] [--cookie-file PATH]
   edge help";
 
 fn base_url() -> String {
@@ -62,6 +64,7 @@ fn main() {
         Some("status") => cmd_status(&args[1..]),
         Some("models") => cmd_models(&args[1..]),
         Some("run") => cmd_run(&args[1..]),
+        Some("chat") => cmd_chat(&args[1..]),
         Some("benchmark") => cmd_benchmark(&args[1..]),
         Some("logs") => cmd_logs(&args[1..]),
         Some("monitor") => cmd_monitor(&args[1..]),
@@ -71,6 +74,7 @@ fn main() {
         Some("devices") => cmd_devices(&args[1..]),
         Some("deploy") => cmd_deploy(&args[1..]),
         Some("update") => cmd_update(&args[1..]),
+        Some("ci-monitor") => cmd_ci_monitor(&args[1..]),
         Some("help" | "-h" | "--help") => {
             println!("{USAGE}");
             0
@@ -248,6 +252,94 @@ fn cmd_run(args: &[String]) -> i32 {
                     opt(&v["model"]),
                     v["load_ms"],
                     v["cached"]
+                );
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("edge: daemon unreachable at {}: {e}", base_url());
+            1
+        }
+    }
+}
+fn cmd_chat(args: &[String]) -> i32 {
+    let Some(model) = args.first() else {
+        eprintln!("usage: edge chat <model> [--prompt TEXT] [--max-tokens N] [--json]");
+        return 2;
+    };
+    if model == "--help" || model == "-h" {
+        println!("usage: edge chat <model> [--prompt TEXT] [--max-tokens N] [--json]");
+        return 0;
+    }
+    let mut prompt = "Hello".to_string();
+    let mut max_tokens = 256usize;
+    let mut json = false;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--prompt" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--prompt requires a value");
+                    return 2;
+                }
+                prompt = args[i].clone();
+            }
+            "--max-tokens" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--max-tokens requires a number");
+                    return 2;
+                }
+                match args[i].parse() {
+                    Ok(n) => max_tokens = n,
+                    Err(_) => {
+                        eprintln!("--max-tokens expects a number");
+                        return 2;
+                    }
+                }
+            }
+            "--json" => json = true,
+            other => {
+                eprintln!("unexpected argument: {other}");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+    let c = client();
+    let body = json!({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens
+    });
+    match c.post_json("/v1/chat/completions", &body) {
+        Ok((status, resp)) => {
+            let v: Value = match serde_json::from_slice(&resp) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("edge: parse response: {e}");
+                    return 1;
+                }
+            };
+            if status >= 400 {
+                eprintln!(
+                    "edge: {}",
+                    v.get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("chat failed")
+                );
+                return 1;
+            }
+            if json {
+                println!("{}", v);
+            } else {
+                let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("");
+                println!("{content}");
+                eprintln!(
+                    "==> model={} tokens={}",
+                    opt(&v["model"]),
+                    v["usage"]["total_tokens"]
                 );
             }
             0
@@ -902,6 +994,133 @@ fn cmd_update(args: &[String]) -> i32 {
     let mut deploy_args = vec![model, "--device".to_string(), device];
     deploy_args.push("--force".to_string());
     cmd_deploy(&deploy_args)
+}
+
+/// `edge ci-monitor`: poll CI/deploy status and send desktop notifications
+fn cmd_ci_monitor(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("usage: edge ci-monitor [--url URL] [--path PATH] [--interval SECS] [--once] [--cookie-file PATH]");
+        println!();
+        println!("Monitors CI/deploy status at the given URL and sends desktop notifications");
+        println!("on status changes (success, failure, start).");
+        println!();
+        println!("Options:");
+        println!("  --url URL           CI endpoint base URL (default: http://10.8.0.9:15201)");
+        println!("  --path PATH         API endpoint path (default: /ci)");
+        println!("  --interval SECS     Poll interval in seconds (default: 30)");
+        println!("  --once              Check once and exit (don't run continuous loop)");
+        println!("  --cookie-file PATH  Path to Netscape-format cookie file for authentication");
+        println!("  --notify-success    Send notification on success (default: true)");
+        println!("  --no-notify-success Disable success notifications");
+        println!("  --notify-failure    Send notification on failure (default: true)");
+        println!("  --no-notify-failure Disable failure notifications");
+        println!("  --notify-start      Send notification when build starts (default: false)");
+        return 0;
+    }
+
+    let mut url = "http://10.8.0.9:15201".to_string();
+    let mut endpoint_path = "/ci".to_string();
+    let mut interval = 30u64;
+    let mut once = false;
+    let mut cookie_file: Option<String> = None;
+    let mut notify_success = true;
+    let mut notify_failure = true;
+    let mut notify_start = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--url" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--url requires a value");
+                    return 2;
+                }
+                url = args[i].clone();
+            }
+            "--path" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--path requires a value");
+                    return 2;
+                }
+                endpoint_path = args[i].clone();
+            }
+            "--interval" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--interval requires a number");
+                    return 2;
+                }
+                match args[i].parse() {
+                    Ok(n) => interval = n,
+                    Err(_) => {
+                        eprintln!("--interval expects a number");
+                        return 2;
+                    }
+                }
+            }
+            "--once" => once = true,
+            "--cookie-file" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--cookie-file requires a path");
+                    return 2;
+                }
+                cookie_file = Some(args[i].clone());
+            }
+            "--notify-success" => notify_success = true,
+            "--no-notify-success" => notify_success = false,
+            "--notify-failure" => notify_failure = true,
+            "--no-notify-failure" => notify_failure = false,
+            "--notify-start" => notify_start = true,
+            other => {
+                eprintln!("unknown option: {other}");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+
+    let config = edge_ai::ci_monitor::CiMonitorConfig {
+        base_url: url,
+        endpoint_path,
+        poll_interval_secs: interval,
+        notify_on_success: notify_success,
+        notify_on_failure: notify_failure,
+        notify_on_start: notify_start,
+        cookie_file,
+    };
+
+    let mut monitor = match edge_ai::ci_monitor::CiMonitor::new(config) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("edge: failed to create CI monitor: {e}");
+            return 1;
+        }
+    };
+
+    if once {
+        match monitor.poll_once() {
+            Ok(changed) => {
+                if changed {
+                    println!("Status changed, notification sent");
+                } else {
+                    println!("No status change");
+                }
+                0
+            }
+            Err(e) => {
+                eprintln!("edge: {e}");
+                1
+            }
+        }
+    } else if let Err(e) = monitor.run() {
+        eprintln!("edge: {e}");
+        1
+    } else {
+        0
+    }
 }
 
 fn opt(v: &Value) -> String {

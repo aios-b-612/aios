@@ -48,18 +48,27 @@ dev-essential = {}
 # VCS + TLS stack for pulling crates/deps inside the OS
 git = {}
 
+# Hardware drivers for Acer Nitro ANV15-51 (i5-13420H + RTX 4050 + MT7921)
+# Note: ihdgd, ihdad, nvmed, rtl8168d are included via base package (base.toml -> minimal.toml -> server.toml)
+# mt7921d = {}       # MediaTek MT7921 WiFi 6E (TODO: create recipe)
+# nvidia = {}        # NVIDIA RTX 4050 (TODO: Nouveau or proprietary)
+
+# Firmware packages
+intel-ucode = {}     # Intel microcode updates
+linux-firmware = {}  # Linux firmware (MT7921, NVIDIA GSP, Intel GPU GuC/HuC, SOF)
+
 # AI Platform groundwork: model cache location (ADR-008)
 [[files]]
 path = "/var/lib/ai"
 data = ""
 directory = true
-mode = 0o755
+mode = 0o1777
 
 [[files]]
 path = "/var/lib/ai/models"
 data = ""
 directory = true
-mode = 0o755
+mode = 0o1777
 
 # Identify this variant
 [[files]]
@@ -68,4 +77,42 @@ data = """
 name = "aios-developer-os"
 phase = 1
 arch = "x86_64"
+"""
+
+# AITask routing config (Phase 4)
+[[files]]
+path = "/etc/ai/tasks.json"
+data = """
+{
+  "summarize": {
+    "description": "Summarize text into key points",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Summarize the following text in 3-5 bullet points:\n\n{input}\n\nSummary:",
+    "max_tokens": 128
+  },
+  "classify": {
+    "description": "Classify text sentiment",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Classify the sentiment of this text as Positive, Negative, or Neutral:\n\n{input}\n\nSentiment:",
+    "max_tokens": 32
+  },
+  "intent": {
+    "description": "Extract intent from user query",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Extract the intent from this query. Respond with a single word (search, create, delete, update, question, command, other):\n\n{input}\n\nIntent:",
+    "max_tokens": 16
+  },
+  "translate": {
+    "description": "Translate text to English",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Translate the following to English:\n\n{input}\n\nTranslation:",
+    "max_tokens": 128
+  },
+  "qa": {
+    "description": "Answer a question",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Answer the following question concisely:\n\n{input}\n\nAnswer:",
+    "max_tokens": 128
+  }
+}
 """

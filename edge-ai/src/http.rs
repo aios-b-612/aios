@@ -25,11 +25,25 @@ impl Request {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct Response {
     pub status: u16,
     pub content_type: &'static str,
     pub body: Vec<u8>,
+    /// When set, the connection streams items as `data: <item>\n\n` frames
+    /// (SSE) after the headers, with a terminal `data: [DONE]`. Consumes the
+    /// iterator lazily — items are flushed to the socket as they are produced.
+    pub stream: Option<Box<dyn Iterator<Item = String> + Send>>,
+}
+
+impl std::fmt::Debug for Response {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Response")
+            .field("status", &self.status)
+            .field("content_type", &self.content_type)
+            .field("body_len", &self.body.len())
+            .field("stream", &self.stream.as_ref().map(|_| "<stream>"))
+            .finish()
+    }
 }
 
 pub fn reason_phrase(code: u16) -> &'static str {
@@ -52,6 +66,7 @@ impl Response {
             status,
             content_type: "application/json",
             body: value.to_string().into_bytes(),
+            stream: None,
         }
     }
 
@@ -60,6 +75,7 @@ impl Response {
             status,
             content_type: "text/html; charset=utf-8",
             body: body.as_bytes().to_vec(),
+            stream: None,
         }
     }
 
@@ -68,11 +84,37 @@ impl Response {
             status,
             content_type: "text/plain; charset=utf-8",
             body: body.as_bytes().to_vec(),
+            stream: None,
         }
     }
 
     pub fn error(status: u16, message: &str) -> Self {
         Response::json(status, &serde_json::json!({ "error": message }))
+    }
+
+    /// SSE (Server-Sent Events) buffered response — the whole body is
+    /// computed before headers are written. For incremental delivery use
+    /// [`Response::sse_stream`].
+    pub fn sse(status: u16, body: String) -> Self {
+        Response {
+            status,
+            content_type: "text/event-stream; charset=utf-8",
+            body: body.into_bytes(),
+            stream: None,
+        }
+    }
+
+    /// SSE streaming response: headers go out first, then each item is
+    /// framed as `data: <item>\n\n` and flushed immediately, ending with
+    /// `data: [DONE]`. No Content-Length; the reader knows the stream is
+    /// over when the connection closes or [DONE] arrives.
+    pub fn sse_stream(status: u16, iter: Box<dyn Iterator<Item = String> + Send>) -> Self {
+        Response {
+            status,
+            content_type: "text/event-stream; charset=utf-8",
+            body: Vec::new(),
+            stream: Some(iter),
+        }
     }
 }
 
@@ -200,7 +242,7 @@ fn handle_connection(stream: &mut TcpStream, handler: &Handler) -> std::io::Resu
             break;
         }
         if buf.len() > MAX_HEADER {
-            return write_response(stream, &Response::error(413, "header too large"));
+            return write_response(stream, Response::error(413, "header too large"));
         }
     }
     let mut parsed = match req {
@@ -220,7 +262,7 @@ fn handle_connection(stream: &mut TcpStream, handler: &Handler) -> std::io::Resu
     }
     parsed.inner.body.truncate(parsed.body_cap);
     let resp = handler(&parsed.inner);
-    write_response(stream, &resp)
+    write_response(stream, resp)
 }
 
 struct ParsedRequest {
@@ -266,7 +308,7 @@ fn parse_request(head: &str, tail: Vec<u8>) -> std::io::Result<ParsedRequest> {
     })
 }
 
-fn write_response(stream: &mut TcpStream, resp: &Response) -> std::io::Result<()> {
+fn write_response(stream: &mut TcpStream, mut resp: Response) -> std::io::Result<()> {
     let mut out = Vec::new();
     out.extend_from_slice(
         format!(
@@ -277,11 +319,28 @@ fn write_response(stream: &mut TcpStream, resp: &Response) -> std::io::Result<()
         .as_bytes(),
     );
     out.extend_from_slice(format!("Content-Type: {}\r\n", resp.content_type).as_bytes());
-    out.extend_from_slice(format!("Content-Length: {}\r\n", resp.body.len()).as_bytes());
+    // Streaming bodies have no known length up front; buffered bodies do.
+    if resp.stream.is_none() {
+        out.extend_from_slice(format!("Content-Length: {}\r\n", resp.body.len()).as_bytes());
+    }
     out.extend_from_slice(b"Connection: close\r\nServer: edge-ai\r\n\r\n");
     out.extend_from_slice(&resp.body);
     stream.write_all(&out)?;
     stream.flush()?;
+
+    // Streaming body: frame each item and flush so the client renders
+    // tokens as they are produced rather than at end of generation.
+    if let Some(iter) = resp.stream.as_mut() {
+        for item in iter.by_ref() {
+            stream.write_all(b"data: ")?;
+            stream.write_all(item.as_bytes())?;
+            stream.write_all(b"\n\n")?;
+            stream.flush()?;
+        }
+        stream.write_all(b"data: [DONE]\n\n")?;
+        stream.flush()?;
+    }
+
     // The Redox netstack does not turn a dropped fd into a TCP FIN in time for
     // the peer. Shutdown the write half so the client read reaches EOF.
     let _ = stream.shutdown(std::net::Shutdown::Write);
@@ -293,6 +352,7 @@ fn write_response(stream: &mut TcpStream, resp: &Response) -> std::io::Result<()
 pub struct Client {
     pub host: String,
     pub port: u16,
+    pub cookie: Option<String>,
 }
 
 impl Client {
@@ -311,7 +371,18 @@ impl Client {
             }
             None => (base.to_string(), super::DEFAULT_PORT),
         };
-        Ok(Client { host, port })
+        Ok(Client {
+            host,
+            port,
+            cookie: None,
+        })
+    }
+
+    /// Create a client with a cookie for authentication.
+    pub fn with_cookie(base: &str, cookie: String) -> Result<Client, String> {
+        let mut client = Self::from_base(base)?;
+        client.cookie = Some(cookie);
+        Ok(client)
     }
 
     /// Perform a request; returns `(status, body)`.
@@ -329,6 +400,9 @@ impl Client {
             "{method} {target} HTTP/1.1\r\nHost: {}:{}\r\nUser-Agent: edge-cli\r\nAccept: application/json\r\n",
             self.host, self.port
         );
+        if let Some(ref cookie) = self.cookie {
+            head.push_str(&format!("Cookie: {cookie}\r\n"));
+        }
         if let Some(b) = body {
             head.push_str(&format!(
                 "Content-Type: application/json\r\nContent-Length: {}\r\n",

@@ -55,6 +55,9 @@ fn handle(rt: &Runtime, upload_state: &Arc<Mutex<UploadState>>, req: &Request) -
         ("GET", "/api/benchmark") => benchmark(rt, req),
         ("GET", "/api/logs") => logs(rt, req),
         ("GET", "/api/metrics") => metrics(rt),
+        // OpenAI-compatible endpoints
+        ("POST", "/v1/chat/completions") => chat_completions(rt, req),
+        ("GET", "/v1/models") => openai_models(rt),
         // Model upload endpoints (chunked multipart)
         ("POST", "/api/models/upload") => upload_chunk(upload_state, req),
         ("POST", "/api/models/upload/finalize") => upload_finalize(rt, upload_state, req),
@@ -99,6 +102,29 @@ fn models(rt: &Runtime) -> Response {
         })
         .collect();
     Response::json(200, &json!({ "count": list.len(), "models": list }))
+}
+
+/// OpenAI-compatible model listing: GET /v1/models.
+/// Mirrors /api/models but in the OpenAI `list.models` envelope so SDKs
+/// (openai-python, langchain, litellm) can discover served models.
+fn openai_models(rt: &Runtime) -> Response {
+    let metas = match rt.list_models() {
+        Ok(m) => m,
+        Err(e) => return Response::error(500, &e),
+    };
+    let created = now() as i64;
+    let data: Vec<_> = metas
+        .iter()
+        .map(|m| {
+            json!({
+                "id": m.name,
+                "object": "model",
+                "created": created,
+                "owned_by": "aios",
+            })
+        })
+        .collect();
+    Response::json(200, &json!({ "object": "list", "data": data }))
 }
 
 fn infer(rt: &Runtime, req: &Request) -> Response {
@@ -506,6 +532,131 @@ fn upload_finalize(
             "path": model_path.display().to_string(),
             "size": model_data.len(),
             "sha256": computed_sha256
+        }),
+    )
+}
+
+/// OpenAI-compatible chat completions endpoint.
+/// POST /v1/chat/completions
+/// Body: { model, messages[], temperature?, max_tokens?, stream? }
+fn chat_completions(rt: &Runtime, req: &Request) -> Response {
+    let body: serde_json::Value = match req.json() {
+        Ok(v) => v,
+        Err(e) => return Response::error(400, &e),
+    };
+
+    let model = match body.get("model").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return Response::error(400, "missing model"),
+    };
+
+    let messages = match body.get("messages").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return Response::error(400, "missing messages array"),
+    };
+
+    if messages.is_empty() {
+        return Response::error(400, "messages array cannot be empty");
+    }
+
+    // Convert OpenAI messages into the chat template the model was trained
+    // with. TinyLlama-1.1B-Chat (Zephyr variant) uses plain SentencePiece
+    // markers as text — there are no `<|start_header_id|>` tokens in the
+    // vocab: the markers are plain words that get BPE-split, and turns are
+    // terminated by `</s>`. Template:
+    //   <|system|>\n{system}</s>\n<|user|>\n{user}</s>\n<|assistant|>\n
+    let mut prompt = String::new();
+    for msg in messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        match role {
+            "system" => prompt.push_str(&format!("<|system|>\n{content}</s>\n")),
+            "user" => prompt.push_str(&format!("<|user|>\n{content}</s>\n")),
+            "assistant" => prompt.push_str(&format!("<|assistant|>\n{content}</s>\n")),
+            _ => prompt.push_str(&format!("<|user|>\n{content}</s>\n")),
+        }
+    }
+    prompt.push_str("<|assistant|>\n");
+
+    let max_tokens = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(256) as usize;
+
+    // Temperature is not supported by greedy generation; ignore for now
+    let _temperature = body.get("temperature").and_then(|v| v.as_f64());
+
+    // Check if streaming is requested
+    let stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    if stream {
+        // Streaming: the runtime iterator yields tokens as the model emits
+        // them; the HTTP layer frames each as an SSE event and flushes.
+        let token_iter = match rt.infer_stream(&model, &prompt, max_tokens) {
+            Ok(s) => s,
+            Err(e) => return Response::error(500, &e),
+        };
+
+        let id = format!("chatcmpl-{}", uuid::Uuid::new_v4().simple());
+        let model = model.clone();
+
+        let framed = token_iter.map(move |token| {
+            let chunk = json!({
+                "id": id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": token },
+                    "finish_reason": null
+                }]
+            });
+            chunk.to_string()
+        });
+
+        return Response::sse_stream(200, Box::new(framed));
+    }
+
+    // Non-streaming response
+    let out = match rt.infer(&model, &prompt, max_tokens) {
+        Ok(o) => o,
+        Err(e) => return Response::error(500, &e),
+    };
+
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    Response::json(
+        200,
+        &json!({
+            "id": format!("chatcmpl-{}", uuid::Uuid::new_v4().simple()),
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": out.text
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": prompt.len() / 4,
+                "completion_tokens": out.text.len() / 4,
+                "total_tokens": (prompt.len() + out.text.len()) / 4
+            }
         }),
     )
 }

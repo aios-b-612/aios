@@ -213,6 +213,31 @@ impl Runtime {
         result
     }
 
+    /// Run streaming inference. Creates a dedicated backend for the stream
+    /// (the shared cache stays untouched for non-streaming requests).
+    /// Returns an iterator that yields tokens as they are generated.
+    pub fn infer_stream(
+        &self,
+        model: &str,
+        prompt: &str,
+        max_tokens: usize,
+    ) -> Result<Box<dyn Iterator<Item = String> + Send + 'static>, String> {
+        let path = self.resolve_model(model).inspect_err(|_| {
+            self.record(true, 0, 0, 0.0);
+        })?;
+
+        // For streaming, create a dedicated local backend — the returned
+        // iterator consumes it, so the shared cache stays free for infer().
+        let mut backend = CandleBackend::new().map_err(|e| format!("backend: {e}"))?;
+        backend
+            .load_model(&path)
+            .map_err(|e| format!("load {path}: {e}"))?;
+
+        backend
+            .generate_stream(prompt, max_tokens.max(1))
+            .map_err(|e| format!("generate_stream: {e}"))
+    }
+
     fn infer_path(&self, path: &str, prompt: &str, max_tokens: usize) -> Result<InferOut, String> {
         let load_ms = self.load_only(path)?;
         let mut cache = self.model_cache.lock().unwrap();

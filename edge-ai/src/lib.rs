@@ -8,6 +8,7 @@
 //! backend (ADR-003).
 
 pub mod api;
+pub mod ci_monitor;
 pub mod daemon;
 pub mod http;
 pub mod metrics;
