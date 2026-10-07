@@ -147,6 +147,12 @@ export FILESYSTEM_CONFIG="${CONTAINER_CONFIG}"
 echo "==> platform patches"
 REDOX_ARCH="${ARCH}" "${SCRIPT_DIR}/apply-patches.sh"
 
+# Materialise the workspace copy the `aios` recipe cooks from. Must run on the
+# host for the same reason the overlay does: in podman mode only redox-os/ is
+# mounted, so aios-src has to exist inside it before the container starts.
+echo "==> aios-src sync"
+"${SCRIPT_DIR}/sync-aios-src.sh"
+
 echo "==> AIOS build"
 echo "    type:     ${CONFIG_NAME} (${ARCH})"
 echo "    config:   ${FILESYSTEM_CONFIG}"

@@ -11,7 +11,10 @@ aios-sdk = { path = "../edge-sdk" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros", "fs", "io-util", "time", "sync"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking", "multipart"] }
+# default-features = false _without_ a TLS backend on purpose: the client only
+# ever talks plain HTTP to devices on the local LAN, and native-tls/openssl
+# does not cross-compile to the Redox target (no openssl in the sysroot).
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "multipart"] }
 anyhow = "1.0"
 thiserror = "1.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }

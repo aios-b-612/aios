@@ -1,0 +1,12 @@
+# Intel microcode updates (overlay; lives in THIS repo, not upstream).
+# Needed by the ai-developer x86_64 profile for the Acer Nitro hardware target.
+[source]
+git = "https://gitlab.redox-os.org/redox-os/intel-ucode.git"
+shallow_clone = true
+
+[build]
+template = "custom"
+script = """
+cd "${COOKBOOK_SOURCE}"
+make install DESTDIR="${COOKBOOK_STAGE}"
+"""
