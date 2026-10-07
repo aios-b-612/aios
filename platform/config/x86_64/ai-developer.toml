@@ -1,0 +1,121 @@
+# AIOS - Developer OS image profile (Phase 1-2)
+#
+# Phase 1: bootable, userspace, filesystem, shell, network.
+# Phase 2: self-hosted Rust toolchain (rustc/cargo/clippy/rustfmt via the
+# `rust` recipe) plus the rest of `dev-essential` (gcc13, make, python,
+# cmake, ...) and `git` for crate checkout.
+# rustup does NOT run inside Redox; packages are managed by `pkg`.
+#
+# This profile is CONSOLE-ONLY: it includes upstream `server.toml`, so the
+# image has no GUI (no Orbital compositor, no orbterm). The upstream
+# `desktop-minimal.toml` is what carries Orbital; see
+# docs/DECISIONS.md (ADR-019) before adding a desktop profile.
+#
+# Upstream revision is pinned in platform/upstream.lock and materialized by
+# platform/scripts/bootstrap.sh — the `include` path below is relative to the
+# upstream tree, not to this repo.
+
+include = ["../../../redox-os/config/server.toml"]
+
+# General settings
+[general]
+# Filesystem size in MiB (sparse on host).
+#
+# The installed content is ~0.9 GiB, so this leaves ~2 GiB of scratch room
+# for cargo/rustc inside the guest.
+#
+# The ceiling here is NOT arbitrary: a bootable live ISO needs the whole
+# filesystem to fit in guest RAM. The live bootloader allocates one contiguous
+# block for the entire RedoxFS below 8 GiB (src/os/uefi/mod.rs, AllocateMaxAddress
+# = 0x2_0000_0000), because a CD-ROM is read-only and the live session works on
+# a RAM copy. Under QEMU the low-memory MMIO hole splits that region, so the
+# largest usable contiguous block is ~3 GiB. Measured: 3072 boots, 3584 dies in
+# the bootloader with SETUP PANIC "out of resources".
+#
+# Raising this past ~3 GiB silently breaks the live ISO (harddrive.img keeps
+# working, which is what makes it confusing). See
+# docs/gotchas/live-iso-ram-ceiling.md.
+filesystem_size = 3072
+# Do not prompt if settings are not defined
+prompt = false
+
+# Package settings
+[packages]
+# Rust example program that boots with the image (compiled inside the OS)
+hello-redox = {}
+# Self-hosted development toolchain (Phase 2)
+dev-essential = {}
+# VCS + TLS stack for pulling crates/deps inside the OS
+git = {}
+
+# Hardware drivers for Acer Nitro ANV15-51 (i5-13420H + RTX 4050 + MT7921)
+# Note: ihdgd, ihdad, nvmed, rtl8168d are included via base package (base.toml -> minimal.toml -> server.toml)
+# mt7921d = {}       # MediaTek MT7921 WiFi 6E (TODO: create recipe)
+# nvidia = {}        # NVIDIA RTX 4050 (TODO: Nouveau or proprietary)
+
+# Firmware packages — for the Acer Nitro target, but only enable once the
+# recipes are versioned: today intel-ucode/ and linux-firmware/ exist only
+# as untracked local recipes in the developer's redox-os clone, and listing
+# them here breaks clean builds (CI: "Package PackageName(...) not found").
+# intel-ucode = {}     # Intel microcode updates
+# linux-firmware = {}  # Linux firmware (MT7921, NVIDIA GSP, Intel GPU GuC/HuC, SOF)
+
+# AI Platform groundwork: model cache location (ADR-008)
+[[files]]
+path = "/var/lib/ai"
+data = ""
+directory = true
+mode = 0o1777
+
+[[files]]
+path = "/var/lib/ai/models"
+data = ""
+directory = true
+mode = 0o1777
+
+# Identify this variant
+[[files]]
+path = "/etc/ai-platform"
+data = """
+name = "aios-developer-os"
+phase = 1
+arch = "x86_64"
+"""
+
+# AITask routing config (Phase 4)
+[[files]]
+path = "/etc/ai/tasks.json"
+data = """
+{
+  "summarize": {
+    "description": "Summarize text into key points",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Summarize the following text in 3-5 bullet points:\n\n{input}\n\nSummary:",
+    "max_tokens": 128
+  },
+  "classify": {
+    "description": "Classify text sentiment",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Classify the sentiment of this text as Positive, Negative, or Neutral:\n\n{input}\n\nSentiment:",
+    "max_tokens": 32
+  },
+  "intent": {
+    "description": "Extract intent from user query",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Extract the intent from this query. Respond with a single word (search, create, delete, update, question, command, other):\n\n{input}\n\nIntent:",
+    "max_tokens": 16
+  },
+  "translate": {
+    "description": "Translate text to English",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Translate the following to English:\n\n{input}\n\nTranslation:",
+    "max_tokens": 128
+  },
+  "qa": {
+    "description": "Answer a question",
+    "model": "tinyllama.q4_k_m",
+    "prompt_template": "Answer the following question concisely:\n\n{input}\n\nAnswer:",
+    "max_tokens": 128
+  }
+}
+"""

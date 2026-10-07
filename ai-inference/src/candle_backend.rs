@@ -22,7 +22,16 @@ pub struct CandleBackend {
 }
 
 fn resolve_tokenizer(model_path: &Path) -> Option<std::path::PathBuf> {
-    let dir = model_path.parent().unwrap_or_else(|| Path::new("."));
+    // `Path::parent` on a bare filename ("model.gguf") returns Some(""), not
+    // None, and the templates below are built by string interpolation. An empty
+    // dir therefore yields "/tokenizer.json" -- an absolute path at the
+    // filesystem root -- so a sibling tokenizer is never found and the model
+    // is reported as having no tokenizer at all. Only a path that actually
+    // carries a directory is usable here.
+    let dir = match model_path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
     let stem = model_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -33,7 +42,26 @@ fn resolve_tokenizer(model_path: &Path) -> Option<std::path::PathBuf> {
             .replace("{stem}", stem);
         let p = Path::new(&candidate);
         if p.is_file() {
-            return Some(p.to_path_buf());
+            return Some(p.to_owned());
+        }
+    }
+    // Fallback: a single `*.tokenizer.json` in the directory is unambiguous
+    // even when its stem does not match the GGUF (e.g. one tokenizer file
+    // shared by quantized variants downloaded under different names).
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut matches: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.ends_with(".tokenizer.json"))
+                        .unwrap_or(false)
+            })
+            .collect();
+        if matches.len() == 1 {
+            return matches.pop();
         }
     }
     None
@@ -78,8 +106,8 @@ impl ComputeBackend for CandleBackend {
 
         let start = Instant::now();
         let mut file = std::fs::File::open(path)?;
-        let content = gguf_file::Content::read(&mut file)
-            .map_err(|e| Error::Msg(format!("gguf: {e}")))?;
+        let content =
+            gguf_file::Content::read(&mut file).map_err(|e| Error::Msg(format!("gguf: {e}")))?;
         let llama = qllama::ModelWeights::from_gguf(content, &mut file, &self.device)
             .map_err(|e| Error::Msg(format!("llama: {e}")))?;
         self.load_time = start.elapsed();
@@ -101,8 +129,14 @@ impl ComputeBackend for CandleBackend {
     }
 
     fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<String> {
-        let llama = self.llama.as_mut().ok_or_else(|| Error::Msg("no model loaded".into()))?;
-        let tokenizer = self.tokenizer.as_ref().ok_or_else(|| Error::Msg("no tokenizer loaded".into()))?;
+        let llama = self
+            .llama
+            .as_mut()
+            .ok_or_else(|| Error::Msg("no model loaded".into()))?;
+        let tokenizer = self
+            .tokenizer
+            .as_ref()
+            .ok_or_else(|| Error::Msg("no tokenizer loaded".into()))?;
 
         let prompt_ids = tokenizer
             .encode(prompt, true)
@@ -157,6 +191,59 @@ impl ComputeBackend for CandleBackend {
         Ok(out)
     }
 
+    fn generate_stream(
+        mut self,
+        prompt: &str,
+        max_tokens: usize,
+    ) -> Result<Box<dyn Iterator<Item = String> + Send + 'static>> {
+        if self.llama.is_none() || self.tokenizer.is_none() {
+            return Err(Error::Msg("no model loaded".into()));
+        }
+
+        let prompt_ids = self
+            .tokenizer
+            .as_ref()
+            .unwrap()
+            .encode(prompt, true)
+            .map_err(|e| Error::Msg(format!("encode: {e}")))?
+            .get_ids()
+            .to_vec();
+        let mut all = prompt_ids;
+        let eos = self.tokenizer.as_ref().unwrap().token_to_id("</s>");
+        let mut index_pos = 0usize;
+        let mut generated = 0usize;
+
+        Ok(Box::new(std::iter::from_fn(move || {
+            if generated >= max_tokens.max(1) {
+                return None;
+            }
+            let context = if generated > 0 { 1 } else { all.len() };
+            let start_pos = all.len().saturating_sub(context);
+            let ctxt = &all[start_pos..all.len()];
+            let input = Tensor::new(ctxt, &self.device).ok()?.unsqueeze(0).ok()?;
+            let llama = self.llama.as_mut()?;
+            let logits = llama.forward(&input, index_pos).ok()?;
+            let logits = logits.squeeze(0).ok()?.to_dtype(DType::F32).ok()?;
+            let next_token = logits.argmax(0).ok()?.to_scalar::<u32>().ok()?;
+            index_pos += ctxt.len();
+
+            let prev_len = all.len();
+            all.push(next_token);
+            generated += 1;
+            let fresh = &all[prev_len..all.len()];
+            let text = self.tokenizer.as_ref().unwrap().decode(fresh, true).ok()?;
+
+            if let Some(eos) = eos {
+                if next_token == eos {
+                    // tps is not recorded here: the stream consumes `self`, so
+                    // there is no backend left for callers to read it from.
+                    return None;
+                }
+            }
+            Some(text)
+        })))
+    }
+
     fn tokens_per_second(&self) -> f64 {
         self.last_tps
     }
@@ -181,4 +268,69 @@ pub fn model_path(backend: &CandleBackend) -> &str {
 /// Model name (GGUF file stem) currently loaded.
 pub fn model_name(backend: &CandleBackend) -> &str {
     &backend.model_name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_tokenizer_finds_sibling_for_bare_filename() {
+        let dir = std::env::temp_dir().join(format!("aios-tok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let stem = "bare-name-test";
+        std::fs::write(dir.join(format!("{stem}.tokenizer.json")), "{}").unwrap();
+
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+        let found = resolve_tokenizer(Path::new(&format!("{stem}.gguf")))
+            .map(|p| p.canonicalize().unwrap());
+        std::env::set_current_dir(prev).unwrap();
+
+        assert_eq!(
+            found,
+            Some(
+                dir.join(format!("{stem}.tokenizer.json"))
+                    .canonicalize()
+                    .unwrap()
+            ),
+            "tokenizer next to a bare filename must resolve in the cwd"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_tokenizer_falls_back_to_single_suffixed_file() {
+        let dir = std::env::temp_dir().join(format!("aios-tok3-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok(); // clean leftovers from failed runs
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("other.tokenizer.json"), "{}").unwrap();
+
+        let found = resolve_tokenizer(&dir.join("model.gguf"));
+        assert_eq!(
+            found.as_deref(),
+            Some(dir.join("other.tokenizer.json").as_path()),
+            "a single *.tokenizer.json resolves regardless of stem"
+        );
+
+        // Two candidates with unrelated stems are ambiguous: no fallback.
+        std::fs::write(dir.join("second.tokenizer.json"), "{}").unwrap();
+        assert!(resolve_tokenizer(&dir.join("model.gguf")).is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_tokenizer_prefers_stem_specific_file() {
+        let dir = std::env::temp_dir().join(format!("aios-tok2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model.tokenizer.json"), "{}").unwrap();
+        std::fs::write(dir.join("tokenizer.json"), "{}").unwrap();
+
+        let found = resolve_tokenizer(&dir.join("model.gguf"));
+        assert_eq!(
+            found.as_deref(),
+            Some(dir.join("model.tokenizer.json").as_path())
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

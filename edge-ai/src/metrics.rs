@@ -106,8 +106,7 @@ fn read_mem_kb() -> Option<(u64, u64)> {
 }
 
 fn kb_of(rest: &str) -> u64 {
-    rest.trim()
-        .split_whitespace()
+    rest.split_whitespace()
         .next()
         .and_then(|n| n.parse().ok())
         .unwrap_or(0)

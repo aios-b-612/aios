@@ -183,12 +183,24 @@ impl Runtime {
         list_installed(Path::new(&default_models_dir())).map_err(|e| e.to_string())
     }
 
+    /// Register a model in the runtime's cache and aios-core registry.
+    pub fn register_model(&self, entry: aios_core::RegistryEntry) -> Result<(), String> {
+        // Add to aios-core registry
+        let mut reg = Registry::load(aios_core::default_registry_file())
+            .map_err(|e| format!("registry: {e}"))?;
+        reg.add(entry.clone());
+        reg.save().map_err(|e| format!("registry save: {e}"))?;
+
+        // Invalidate cache so next infer loads the new model
+        *self.model_cache.lock().unwrap() = None;
+        Ok(())
+    }
+
     /// Run inference, caching one model at a time across requests.
     pub fn infer(&self, model: &str, prompt: &str, max_tokens: usize) -> Result<InferOut, String> {
         let wall = Instant::now();
-        let path = self.resolve_model(model).map_err(|e| {
+        let path = self.resolve_model(model).inspect_err(|_| {
             self.record(true, 0, 0, 0.0);
-            e
         })?;
         let result = self.infer_path(&path, prompt, max_tokens);
         match &result {
@@ -199,6 +211,31 @@ impl Runtime {
             }
         }
         result
+    }
+
+    /// Run streaming inference. Creates a dedicated backend for the stream
+    /// (the shared cache stays untouched for non-streaming requests).
+    /// Returns an iterator that yields tokens as they are generated.
+    pub fn infer_stream(
+        &self,
+        model: &str,
+        prompt: &str,
+        max_tokens: usize,
+    ) -> Result<Box<dyn Iterator<Item = String> + Send + 'static>, String> {
+        let path = self.resolve_model(model).inspect_err(|_| {
+            self.record(true, 0, 0, 0.0);
+        })?;
+
+        // For streaming, create a dedicated local backend — the returned
+        // iterator consumes it, so the shared cache stays free for infer().
+        let mut backend = CandleBackend::new().map_err(|e| format!("backend: {e}"))?;
+        backend
+            .load_model(&path)
+            .map_err(|e| format!("load {path}: {e}"))?;
+
+        backend
+            .generate_stream(prompt, max_tokens.max(1))
+            .map_err(|e| format!("generate_stream: {e}"))
     }
 
     fn infer_path(&self, path: &str, prompt: &str, max_tokens: usize) -> Result<InferOut, String> {
@@ -228,7 +265,9 @@ impl Runtime {
             }
         }
         let mut backend = CandleBackend::new().map_err(|e| format!("backend: {e}"))?;
-        backend.load_model(path).map_err(|e| format!("load {path}: {e}"))?;
+        backend
+            .load_model(path)
+            .map_err(|e| format!("load {path}: {e}"))?;
         let load_ms = aios_inference::load_time(&backend).as_millis();
         *cache = Some(Cache {
             backend,

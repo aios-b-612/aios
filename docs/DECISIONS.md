@@ -11,6 +11,7 @@
 - **Contexto**: O Redox upstream é um microkernel ativo. Modificações sem necessidade técnica seriam um fork e quebrariam updates.
 - **Decisão**: Todas as funcionalidades são implementadas em userspace (serviço, daemon, CLI, package, runtime, library, config). Kernel só quando: (1) tecnicamente necessário; (2) justificado; (3) com testes; (4) com docs; (5) sem alternativa em userspace.
 - **Consequências**: + compatibilidade upstream; - acesso a recursos profundos (ex.: aceleradores) não disponíveis no início.
+- **Exceção registrada (2026-09-29) — drivers, não kernel**: o `nvmed` aarch64 é driver de **userspace** (`base.git/drivers/`), portanto esta ADR não se opõe ao patch `platform/patches/aarch64/nvmed-aarch64-poll-fence.patch`, mas o mecanismo de aplicação toca um tree upstream. O patch é repassado por overlay idempotente e versionado, com o pin git intacto e `bootstrap.sh --verify` falhando se o recipe, o patch ou a regra do `cookbook.lock` divergirem. O que se perde é a premissa de que `redox-os/` é byte-idêntico ao upstream; o que se preserva é a atualizações por pin, já que nada é enviado ao Redox (ADR-014). O `--cookbook` do `repo cook` seria o meio limpo, mas é código morto nesta versão (a receita é resolvida por `Walk::new("recipes")` relativo ao CWD, e `config.cookbook_dir` nunca é lido).
 
 ## ADR-002 — GGUF como formato nativo de modelo
 
@@ -34,6 +35,7 @@
 - **Contexto**: Auditoria: x86_64 maduro, aarch64 funcional no QEMU, RPi 3B+ "boot", RPi 4/5 não validados. Wi-Fi e Bluetooth não suportados. **Validado em Fase 1 (2026-09-24)**: QEMU aarch64 boots até kernel+initfs, mas o daemon `nvmed` initfs estoura a stack (guard page) no master ⇒ `/usr` não monta ⇒ sem login. Upstream não faz CI de boot aarch64.
 - **Decisão**: Desenvolvimento em x86_64; validação ARM em QEMU virt (aarch64); hardware Raspberry Pi apenas quando boot real comprovado (começando RPi 3B+). Proibido "fake support".
 - **Consequências**: Produto confiável; RPi 4/5 não prometido até validação. Edge OS aarch64: imagem constrói e canário de boot (bootloader+kernel) passa; userland bloqueada por bug upstream — monitorar (aguardar correção upstream; sem contribuir) antes de Fase 5.
+- **Atualização (2026-09-29) — aarch64 validado, Pi segue não suportado**: o bloqueio em userspace era o `nvmed` pendurando na enumeração de namespaces sob QEMU `virt`, corrigido localmente por poll mode + fences de DMA (`platform/patches/aarch64/nvmed-aarch64-poll-fence.patch`). O `ai-edge` aarch64 agora sobe até `login:`, shell interativo e passa todos os milestones do canário. **Isto é evidência de QEMU, não de hardware**: aBring-up do Pi continua bloqueado, porque o driver SDHCI casa apenas `brcm,bcm2835-sdhci` e o Pi 4 usa BCM2711; o Pi 5 exige trabalho separado em RP1/PCIe. A decisão de não prometer RPi 4/5 sem boot real permanece inalterada.
 
 ## ADR-005 — Isolamento via `contain` + schemes, sem sandbox fake
 
@@ -165,7 +167,7 @@
 
 ---
 
-## ADR-018 — Site público estático hospedado no GitHub Pages
+## ADR-022 — Site público estático hospedado no GitHub Pages
 
 - **Contexto**: a direção do mantenedor (2026-09-25) pede um site público para o AIOS (referência visual: obscura.sh) cobrindo desktop OS, Raspberry Pi/aarch64, família tiny SLM e apps próprios. Até então a única superfície web era o painel local em `edge-ai/src/panel.rs`, servido em `127.0.0.1` dentro do guest — inalcançável de fora e sem TLS. Alternativas avaliadas: (a) servir o site pelo próprio daemon `edge-ai` em modo web-only; (b) GitHub Pages com site estático versionado no repositório; (c) GitHub Pages em repositório dedicado da organização.
 - **Decisão**: site estático sem build e sem dependências (HTML/CSS/JS, PT-BR, responsivo) em repositório **dedicado** — `aios-b-612/aios-b-612.github.io` — publicado no GitHub Pages direto de `main`. O site **não** vive neste repositório: o código do SO não carrega artefatos de site, e o repositório de pages é público por definição. O painel do `edge-ai` continua sendo a interface local de runtime/métricas, não a vitrine pública.

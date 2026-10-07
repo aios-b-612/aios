@@ -25,11 +25,25 @@ impl Request {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct Response {
     pub status: u16,
     pub content_type: &'static str,
     pub body: Vec<u8>,
+    /// When set, the connection streams items as `data: <item>\n\n` frames
+    /// (SSE) after the headers, with a terminal `data: [DONE]`. Consumes the
+    /// iterator lazily — items are flushed to the socket as they are produced.
+    pub stream: Option<Box<dyn Iterator<Item = String> + Send>>,
+}
+
+impl std::fmt::Debug for Response {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Response")
+            .field("status", &self.status)
+            .field("content_type", &self.content_type)
+            .field("body_len", &self.body.len())
+            .field("stream", &self.stream.as_ref().map(|_| "<stream>"))
+            .finish()
+    }
 }
 
 pub fn reason_phrase(code: u16) -> &'static str {
@@ -52,6 +66,7 @@ impl Response {
             status,
             content_type: "application/json",
             body: value.to_string().into_bytes(),
+            stream: None,
         }
     }
 
@@ -60,6 +75,7 @@ impl Response {
             status,
             content_type: "text/html; charset=utf-8",
             body: body.as_bytes().to_vec(),
+            stream: None,
         }
     }
 
@@ -68,11 +84,37 @@ impl Response {
             status,
             content_type: "text/plain; charset=utf-8",
             body: body.as_bytes().to_vec(),
+            stream: None,
         }
     }
 
     pub fn error(status: u16, message: &str) -> Self {
         Response::json(status, &serde_json::json!({ "error": message }))
+    }
+
+    /// SSE (Server-Sent Events) buffered response — the whole body is
+    /// computed before headers are written. For incremental delivery use
+    /// [`Response::sse_stream`].
+    pub fn sse(status: u16, body: String) -> Self {
+        Response {
+            status,
+            content_type: "text/event-stream; charset=utf-8",
+            body: body.into_bytes(),
+            stream: None,
+        }
+    }
+
+    /// SSE streaming response: headers go out first, then each item is
+    /// framed as `data: <item>\n\n` and flushed immediately, ending with
+    /// `data: [DONE]`. No Content-Length; the reader knows the stream is
+    /// over when the connection closes or [DONE] arrives.
+    pub fn sse_stream(status: u16, iter: Box<dyn Iterator<Item = String> + Send>) -> Self {
+        Response {
+            status,
+            content_type: "text/event-stream; charset=utf-8",
+            body: Vec::new(),
+            stream: Some(iter),
+        }
     }
 }
 
@@ -99,7 +141,11 @@ pub fn serve(addr: &str, handler: &'static Handler) -> std::io::Result<()> {
 /// Parse the response status line ("HTTP/1.1 200 OK") into the code.
 fn status_code(line: &str) -> u16 {
     let mut parts = line.split_whitespace();
-    if parts.next().map(|s| s.starts_with("HTTP/")).unwrap_or(false) {
+    if parts
+        .next()
+        .map(|s| s.starts_with("HTTP/"))
+        .unwrap_or(false)
+    {
         if let Some(code) = parts.next() {
             if let Ok(c) = code.parse() {
                 return c;
@@ -156,6 +202,28 @@ fn header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
+/// True when the buffer holds the status line, headers and the full body
+/// advertised by `Content-Length`. Without that header the caller keeps
+/// reading until the peer closes.
+fn response_ready(buf: &[u8]) -> bool {
+    let Some(pos) = header_end(buf) else {
+        return false;
+    };
+    let head = String::from_utf8_lossy(&buf[..pos]);
+    let mut content_length: Option<usize> = None;
+    for line in head.lines().skip(1) {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("content-length") {
+                content_length = v.trim().parse().ok();
+            }
+        }
+    }
+    match content_length {
+        Some(len) => buf.len() >= pos + 4 + len,
+        None => false,
+    }
+}
+
 fn handle_connection(stream: &mut TcpStream, handler: &Handler) -> std::io::Result<()> {
     // Read incrementally until the header block is complete.
     let mut buf: Vec<u8> = Vec::new();
@@ -174,7 +242,7 @@ fn handle_connection(stream: &mut TcpStream, handler: &Handler) -> std::io::Resu
             break;
         }
         if buf.len() > MAX_HEADER {
-            return write_response(stream, &Response::error(413, "header too large"));
+            return write_response(stream, Response::error(413, "header too large"));
         }
     }
     let mut parsed = match req {
@@ -194,7 +262,7 @@ fn handle_connection(stream: &mut TcpStream, handler: &Handler) -> std::io::Resu
     }
     parsed.inner.body.truncate(parsed.body_cap);
     let resp = handler(&parsed.inner);
-    write_response(stream, &resp)
+    write_response(stream, resp)
 }
 
 struct ParsedRequest {
@@ -209,7 +277,10 @@ fn parse_request(head: &str, tail: Vec<u8>) -> std::io::Result<ParsedRequest> {
     let method = parts.next().unwrap_or_default().to_string();
     let target = parts.next().unwrap_or_default();
     if method.is_empty() || target.is_empty() {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "bad request line"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "bad request line",
+        ));
     }
     let (path, query) = match target.split_once('?') {
         Some((p, q)) => (p.to_string(), parse_query(q)),
@@ -237,17 +308,42 @@ fn parse_request(head: &str, tail: Vec<u8>) -> std::io::Result<ParsedRequest> {
     })
 }
 
-fn write_response(stream: &mut TcpStream, resp: &Response) -> std::io::Result<()> {
+fn write_response(stream: &mut TcpStream, mut resp: Response) -> std::io::Result<()> {
     let mut out = Vec::new();
     out.extend_from_slice(
-        format!("HTTP/1.1 {} {}\r\n", resp.status, reason_phrase(resp.status)).as_bytes(),
+        format!(
+            "HTTP/1.1 {} {}\r\n",
+            resp.status,
+            reason_phrase(resp.status)
+        )
+        .as_bytes(),
     );
     out.extend_from_slice(format!("Content-Type: {}\r\n", resp.content_type).as_bytes());
-    out.extend_from_slice(format!("Content-Length: {}\r\n", resp.body.len()).as_bytes());
+    // Streaming bodies have no known length up front; buffered bodies do.
+    if resp.stream.is_none() {
+        out.extend_from_slice(format!("Content-Length: {}\r\n", resp.body.len()).as_bytes());
+    }
     out.extend_from_slice(b"Connection: close\r\nServer: edge-ai\r\n\r\n");
     out.extend_from_slice(&resp.body);
     stream.write_all(&out)?;
     stream.flush()?;
+
+    // Streaming body: frame each item and flush so the client renders
+    // tokens as they are produced rather than at end of generation.
+    if let Some(iter) = resp.stream.as_mut() {
+        for item in iter.by_ref() {
+            stream.write_all(b"data: ")?;
+            stream.write_all(item.as_bytes())?;
+            stream.write_all(b"\n\n")?;
+            stream.flush()?;
+        }
+        stream.write_all(b"data: [DONE]\n\n")?;
+        stream.flush()?;
+    }
+
+    // The Redox netstack does not turn a dropped fd into a TCP FIN in time for
+    // the peer. Shutdown the write half so the client read reaches EOF.
+    let _ = stream.shutdown(std::net::Shutdown::Write);
     Ok(())
 }
 
@@ -256,6 +352,7 @@ fn write_response(stream: &mut TcpStream, resp: &Response) -> std::io::Result<()
 pub struct Client {
     pub host: String,
     pub port: u16,
+    pub cookie: Option<String>,
 }
 
 impl Client {
@@ -274,11 +371,27 @@ impl Client {
             }
             None => (base.to_string(), super::DEFAULT_PORT),
         };
-        Ok(Client { host, port })
+        Ok(Client {
+            host,
+            port,
+            cookie: None,
+        })
+    }
+
+    /// Create a client with a cookie for authentication.
+    pub fn with_cookie(base: &str, cookie: String) -> Result<Client, String> {
+        let mut client = Self::from_base(base)?;
+        client.cookie = Some(cookie);
+        Ok(client)
     }
 
     /// Perform a request; returns `(status, body)`.
-    pub fn request(&self, method: &str, path: &str, body: Option<&[u8]>) -> Result<(u16, Vec<u8>), String> {
+    pub fn request(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+    ) -> Result<(u16, Vec<u8>), String> {
         let mut target = String::from(path);
         if target.is_empty() {
             target.push('/');
@@ -287,8 +400,14 @@ impl Client {
             "{method} {target} HTTP/1.1\r\nHost: {}:{}\r\nUser-Agent: edge-cli\r\nAccept: application/json\r\n",
             self.host, self.port
         );
+        if let Some(ref cookie) = self.cookie {
+            head.push_str(&format!("Cookie: {cookie}\r\n"));
+        }
         if let Some(b) = body {
-            head.push_str(&format!("Content-Type: application/json\r\nContent-Length: {}\r\n", b.len()));
+            head.push_str(&format!(
+                "Content-Type: application/json\r\nContent-Length: {}\r\n",
+                b.len()
+            ));
         }
         head.push_str("Connection: close\r\n\r\n");
 
@@ -298,7 +417,9 @@ impl Client {
             .write_all(head.as_bytes())
             .map_err(|e| format!("write: {e}"))?;
         if let Some(b) = body {
-            stream.write_all(b).map_err(|e| format!("write body: {e}"))?;
+            stream
+                .write_all(b)
+                .map_err(|e| format!("write body: {e}"))?;
         }
         stream.flush().map_err(|e| format!("flush: {e}"))?;
 
@@ -310,8 +431,12 @@ impl Client {
                 break;
             }
             buf.extend_from_slice(&tmp[..n]);
+            if response_ready(&buf) {
+                break;
+            }
         }
-        let pos = header_end(&buf).ok_or_else(|| "malformed response (no header end)".to_string())?;
+        let pos =
+            header_end(&buf).ok_or_else(|| "malformed response (no header end)".to_string())?;
         let head = String::from_utf8_lossy(&buf[..pos]).into_owned();
         let mut lines = head.lines();
         let status = status_code(lines.next().unwrap_or_default());
@@ -332,7 +457,11 @@ impl Client {
         self.request("GET", path, None)
     }
 
-    pub fn post_json(&self, path: &str, value: &serde_json::Value) -> Result<(u16, Vec<u8>), String> {
+    pub fn post_json(
+        &self,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<(u16, Vec<u8>), String> {
         self.request("POST", path, Some(value.to_string().as_bytes()))
     }
 }
@@ -354,6 +483,15 @@ mod tests {
         assert_eq!(status_code("HTTP/1.1 200 OK"), 200);
         assert_eq!(status_code("HTTP/1.1 503 Service Unavailable"), 503);
         assert_eq!(status_code("garbage"), 0);
+    }
+
+    #[test]
+    fn response_ready_waits_for_content_length() {
+        let partial = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nab";
+        assert!(!response_ready(partial));
+        let full = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nabcde";
+        assert!(response_ready(full));
+        assert!(!response_ready(b"HTTP/1.1 200 OK\r\n\r\nabcde"));
     }
 
     #[test]

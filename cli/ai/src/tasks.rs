@@ -82,6 +82,48 @@ fn builtins() -> Vec<TaskSpec> {
             "Answer the question based only on the context provided. If the answer is not in the context, say so.\nContext:\n{input}",
             160,
         ),
+        builtin(
+            "correct",
+            "fix grammar, spelling, and style of a text",
+            "Correct grammar, spelling, and punctuation in the following text. Preserve the original meaning and tone. Output only the corrected text.\nText:\n{input}",
+            128,
+        ),
+        builtin(
+            "rewrite",
+            "paraphrase or rewrite a text with different style/tone",
+            "Rewrite the following text to improve clarity and flow while preserving the original meaning. Output only the rewritten text.\nText:\n{input}",
+            192,
+        ),
+        builtin(
+            "extract",
+            "extract named entities, keywords, or key phrases from text",
+            "Extract the key entities, concepts, and phrases from the following text. Output as a JSON array of strings.\nText:\n{input}",
+            128,
+        ),
+        builtin(
+            "code",
+            "explain, review, or generate code from a description",
+            "You are a helpful programming assistant. {input}\n\nProvide clear, concise code with brief explanations where helpful.",
+            256,
+        ),
+        builtin(
+            "autocomplete",
+            "complete a code snippet or continue a partial implementation",
+            "Complete the following code snippet. Output only the completion, no explanations.\nCode:\n{input}",
+            128,
+        ),
+        builtin(
+            "review",
+            "review code for bugs, style, and improvements",
+            "Review the following code for bugs, performance issues, security concerns, and style. Output as bullet points.\nCode:\n{input}",
+            256,
+        ),
+        builtin(
+            "explain",
+            "explain a concept, code, or text in simple terms",
+            "Explain the following in clear, simple terms as if teaching a beginner. Use analogies where helpful.\nTopic:\n{input}",
+            192,
+        ),
     ]
 }
 
@@ -150,8 +192,9 @@ impl TaskRouter {
                     spec.clone()
                 }
                 None => {
-                    let prompt =
-                        route.prompt.ok_or_else(|| format!("task '{name}': new tasks need a \"prompt\""))?;
+                    let prompt = route
+                        .prompt
+                        .ok_or_else(|| format!("task '{name}': new tasks need a \"prompt\""))?;
                     TaskSpec {
                         name: name.clone(),
                         description: route.description.unwrap_or_default(),
@@ -187,8 +230,7 @@ impl TaskRouter {
 
     /// Default routing config path (env `AIOS_TASKS` or `/etc/ai/tasks.json`).
     pub fn default_tasks_file() -> String {
-        std::env::var("AIOS_TASKS")
-            .unwrap_or_else(|_| "/etc/ai/tasks.json".to_string())
+        std::env::var("AIOS_TASKS").unwrap_or_else(|_| "/etc/ai/tasks.json".to_string())
     }
 }
 

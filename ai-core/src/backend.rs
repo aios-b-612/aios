@@ -24,6 +24,15 @@ pub trait ComputeBackend {
     /// Generate a completion for `prompt`. Backends may cap tokens.
     fn generate(&mut self, prompt: &str, max_tokens: usize) -> Result<String>;
 
+    /// Streaming generation: yields tokens one at a time via iterator.
+    /// Each item is a newly generated token string (may be partial word).
+    /// Takes ownership of the backend; the returned iterator owns all generation state.
+    fn generate_stream(
+        self,
+        prompt: &str,
+        max_tokens: usize,
+    ) -> Result<Box<dyn Iterator<Item = String> + Send + 'static>>;
+
     /// Measured throughput from the last load/generate window (tokens/s),
     /// or 0.0 when unknown. Non-fatal.
     fn tokens_per_second(&self) -> f64 {
