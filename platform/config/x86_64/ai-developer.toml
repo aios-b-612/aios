@@ -53,9 +53,12 @@ git = {}
 # mt7921d = {}       # MediaTek MT7921 WiFi 6E (TODO: create recipe)
 # nvidia = {}        # NVIDIA RTX 4050 (TODO: Nouveau or proprietary)
 
-# Firmware packages
-intel-ucode = {}     # Intel microcode updates
-linux-firmware = {}  # Linux firmware (MT7921, NVIDIA GSP, Intel GPU GuC/HuC, SOF)
+# Firmware packages — for the Acer Nitro target, but only enable once the
+# recipes are versioned: today intel-ucode/ and linux-firmware/ exist only
+# as untracked local recipes in the developer's redox-os clone, and listing
+# them here breaks clean builds (CI: "Package PackageName(...) not found").
+# intel-ucode = {}     # Intel microcode updates
+# linux-firmware = {}  # Linux firmware (MT7921, NVIDIA GSP, Intel GPU GuC/HuC, SOF)
 
 # AI Platform groundwork: model cache location (ADR-008)
 [[files]]
