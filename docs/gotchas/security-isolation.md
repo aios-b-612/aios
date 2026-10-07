@@ -450,6 +450,35 @@ concrete, bounded experiments follow from this:
 
 Experiment 1 is the higher-value one and is the next thing to try.
 
+### Root cause found (2026-10-06): signal delivery corrupts the return value of an in-flight syscall
+
+The aarch64 `FATAL: Not an SVC` crash and this write-past-end are the **same
+upstream bug**. Measured with an instrumented kernel (ring buffer over every
+`SYS_YIELD`, every signal delivery, and the fatal trap), the sequence is:
+
+1. A process is suspended **inside** a syscall (e.g. `SYS_YIELD` deschedules
+   itself, or a long `mmap` in `ld.so`). At that moment the trap frame still
+   holds the syscall **arguments** (`x0=-1` for the relibc `verify()` call).
+2. A tick reselects the context; `context/signal.rs::signal_handler` finds a
+   pending signal and captures the frame's `x0` and `ip` into the single
+   per-thread slots `saved_archdep_reg` / `saved_ip`.
+3. The userspace signal stub later restores that captured `x0` as if it were
+   the syscall's return value. `verify()` sees `-1` and runs `brk #1` (the
+   `Not an SVC` FATAL); the dynamic loader uses a corrupt pointer and writes
+   past the end of the DSO mapping (this page).
+4. The stub clears `INHIBIT_DELIVERY` early, so a second delivery overwrites
+   the single saved slot of the first — nested deliveries are destructive by
+   construction.
+
+This explains the unexplained per-binary rates: the window is unbounded by
+signal traffic, and scales with how long each exec keeps the process inside
+syscalls during `ld.so` library loading — static binaries never crash,
+`which`/`true` never crash, and `ls` vs `cat` differs only by exposure time.
+
+Full measurement and reproduction: `docs/FORK_ION_DIAG.md`. The protocol fix
+is upstream: don't capture regs from a context suspended inside a syscall,
+and replace the single saved slot with a per-delivery userspace sigframe.
+
 ### The fault is almost certainly inside relibc's dynamic loader
 
 This is the conclusion the register evidence actually supports, and it is a
