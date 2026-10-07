@@ -45,19 +45,10 @@ prompt = false
 # "[ld.so]: failed to link '/usr/bin/cat': NotFound".
 coreutils = {}
 
-# AIOS packages (Phase 3-5) are NOT cooked here yet: their cookbook recipes
-# live only on the developer workstation (and reference the workspace by an
-# absolute path), so this list would break any clean build, CI included. The
-# validated path ships the built binaries into the image post-build (inject,
-# see ROADMAP Phase 5). Turning those recipes into a versioned overlay under
-# platform/recipes/ is tracked as a follow-up.
-# aios-core = {}
-# aios-inference = {}
-# edge-sdk = {}
-# aios-cli = {}
-# edge-ai = {}
-# aios-deploy = {}
-# aios-security = {}
+# AIOS workspace (Phases 3-8): one recipe cooking the whole workspace, so the
+# workspace path deps resolve. Built from the filtered copy at
+# redox-os/aios-src (platform/scripts/sync-aios-src.sh).
+aios = {}
 
 # AI Platform groundwork: model cache location (ADR-008)
 [[files]]
