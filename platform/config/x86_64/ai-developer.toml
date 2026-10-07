@@ -54,7 +54,9 @@ git = {}
 # nvidia = {}        # NVIDIA RTX 4050 (TODO: Nouveau or proprietary)
 
 # Firmware packages (overlay recipes versioned in platform/recipes/core/)
-intel-ucode = {}     # Intel microcode updates
+# intel-ucode: upstream gitlab.redox-os.org requires auth; blocked in CI.
+# Follow-up: publish a public mirror/tarball and re-enable.
+# intel-ucode = {}     # Intel microcode updates
 linux-firmware = {}  # Linux firmware (MT7921, NVIDIA GSP, Intel GPU GuC/HuC, SOF)
 
 # AIOS workspace (Phases 3-8): one recipe cooking the whole workspace, so the
