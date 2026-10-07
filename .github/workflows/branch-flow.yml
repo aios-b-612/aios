@@ -1,0 +1,58 @@
+name: Branch flow guard
+
+# Policy: work branches integrate through `dev`, and only `dev` promotes to
+# `main`. This job makes that a required check instead of a written rule
+# nobody reads: a PR opened against the wrong base fails here before anyone
+# can merge it.
+#
+# The flow, as enforced below:
+#   feature/*, fix/*, docs/*, chore/*, ci/*, test/*, refactor/*  ->  dev
+#   hotfix/*                                                      ->  main
+#     (a hotfix lands on main first, then the same fix is replicated to dev)
+#   dev                                                           ->  main
+#   main                                                          ->  never a source
+on:
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  base-check:
+    name: PR targets the right base branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce the integration flow
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          case "$HEAD_REF" in
+            feature/*|fix/*|docs/*|chore/*|ci/*|test/*|refactor/*|build/*|perf/*)
+              if [ "$BASE_REF" != "dev" ]; then
+                echo "::error title=Wrong base::Branch '$HEAD_REF' is a work branch and must target 'dev' (got '$BASE_REF'). Integration happens in dev; the dev -> main promote is a separate PR."
+                exit 1
+              fi
+              ;;
+            hotfix/*)
+              if [ "$BASE_REF" != "main" ]; then
+                echo "::error title=Wrong base::hotfix branches target 'main' directly (got '$BASE_REF'). After merging, replicate the same fix into 'dev'."
+                exit 1
+              fi
+              echo "::notice title=Hotfix::After this merge, replicate the fix into 'dev' so the branches do not diverge."
+              ;;
+            dev)
+              if [ "$BASE_REF" != "main" ]; then
+                echo "::error title=Wrong base::'dev' only promotes to 'main' (got '$BASE_REF')."
+                exit 1
+              fi
+              ;;
+            main)
+              echo "::error title=Forbidden source::Never open a PR from 'main'."
+              exit 1
+              ;;
+            *)
+              echo "::notice title=Unconventional name::'$HEAD_REF' -> '$BASE_REF' is outside the convention (feature/*, fix/*, hotfix/*, ...). Allowed for now, but prefer a work branch targeting 'dev'."
+              ;;
+          esac

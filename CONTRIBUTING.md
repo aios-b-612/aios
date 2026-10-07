@@ -73,6 +73,23 @@ Três pontos que não são negociáveis e que já custaram tempo:
    tokenizer de um modelo é um artefato de modelo, não um arquivo de código; o
    `docs/benchmarks.md` traz os comandos de download.
 
+## Fluxo de branches
+
+`dev` é a branch de integração. O fluxo é obrigatório e o CI o faz cumprir:
+
+| Origem | Destino | Regra |
+| --- | --- | --- |
+| `feature/*`, `fix/*`, `docs/*`, `chore/*`, `ci/*`, `test/*`, `refactor/*`, `build/*`, `perf/*` | `dev` | PR com base `dev`; o job `Branch flow guard` falha se a base for outra |
+| `hotfix/*` | `main` | Só emergência de produção; depois o mesmo fix é replicado em `dev` |
+| `dev` | `main` | Promote é um PR separado, deliberado |
+| `main` | — | Nunca é origem de PR |
+
+Concluído e mergeado, **a branch morre**: o repositório apaga a branch
+automaticamente no merge (configuração "Automatically delete head branches")
+e o job `branch-cleanup.yml` (a cada push em `dev`/`main` + diário) apaga do
+remoto qualquer branch cujo tip já esteja em `dev`/`main` sem PR aberta.
+Trabalho em curso mantém a branch; trabalho mergeado não fica pendurado.
+
 ## Regras de conteúdo
 
 - **Português** para docs. **Inglês** para mensagens de commit e comentários de

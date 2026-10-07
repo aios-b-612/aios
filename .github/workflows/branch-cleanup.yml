@@ -1,0 +1,59 @@
+name: Merged branch cleanup
+
+# Complements the repo setting "Automatically delete head branches": that
+# setting covers branches merged through a PR; this job is the safety net for
+# the other two ways a branch becomes stale here -- merged by a direct push to
+# dev/main, or simply abandoned after its tip landed. A branch is deleted only
+# when (a) its tip is already an ancestor of origin/dev or origin/main and
+# (b) no OPEN PR still uses it as head. Work in progress keeps its branch.
+on:
+  push:
+    branches: [dev, main]
+  schedule:
+    - cron: "17 3 * * *" # daily, off-peak
+  workflow_dispatch:
+
+permissions:
+  contents: write # required to push --delete
+  pull-requests: read
+
+jobs:
+  prune:
+    name: Delete branches whose tip is already merged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prune merged remote branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+          deleted=0
+          kept=0
+          for ref in $(git branch -r --format='%(refname:short)' \
+              | grep -Ev '^(origin/HEAD|origin/main|origin/dev)$'); do
+            branch="${ref#origin/}"
+
+            merged_into_dev=$(git merge-base --is-ancestor "$ref" origin/dev && echo yes || echo no)
+            merged_into_main=$(git merge-base --is-ancestor "$ref" origin/main && echo yes || echo no)
+            if [ "$merged_into_dev" = no ] && [ "$merged_into_main" = no ]; then
+              echo "keep   $branch (tip not merged)"
+              kept=$((kept+1))
+              continue
+            fi
+
+            open_prs=$(gh api "repos/$GITHUB_REPOSITORY/pulls?head=${GITHUB_REPOSITORY_OWNER}:${branch}&state=open" --jq 'length')
+            if [ "$open_prs" != "0" ]; then
+              echo "keep   $branch (merged, but has an open PR)"
+              kept=$((kept+1))
+              continue
+            fi
+
+            echo "delete $branch (tip already in dev/main, no open PR)"
+            git push origin --delete "$branch"
+            deleted=$((deleted+1))
+          done
+          echo "summary: deleted=$deleted kept=$kept"
