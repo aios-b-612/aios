@@ -246,10 +246,17 @@ set +e
     sleep "${LOGIN_DELAY}"
     printf 'user\n' || true
     sleep 2
-    printf 'ls /var/lib/ai\n' || true
-    sleep 2
-    printf 'cat /etc/ai-platform\n' || true
-    sleep 2
+    # Guest ls/cat crash intermittently at load time: an upstream relibc
+    # dynamic-loader bug (ROADMAP Phase 5, docs/FORK_ION_DIAG.md) kills the
+    # child while the shell survives, so retyping is safe. The milestone
+    # check still requires the marker string in the log -- retries only
+    # absorb the loader crash, they cannot fake a missing file.
+    for i in $(seq 1 "${GUEST_CMD_RETRIES:-8}"); do
+        printf 'ls /var/lib/ai\n' || true
+        sleep 2
+        printf 'cat /etc/ai-platform\n' || true
+        sleep 2
+    done
     printf 'exit\n' || true
     sleep 2
 ) 2>/dev/null | timeout --foreground "${TIMEOUT_SECS}" "${QEMU_BIN}" \
