@@ -210,7 +210,6 @@ impl ComputeBackend for CandleBackend {
             .to_vec();
         let mut all = prompt_ids;
         let eos = self.tokenizer.as_ref().unwrap().token_to_id("</s>");
-        let start = Instant::now();
         let mut index_pos = 0usize;
         let mut generated = 0usize;
 
@@ -236,7 +235,8 @@ impl ComputeBackend for CandleBackend {
 
             if let Some(eos) = eos {
                 if next_token == eos {
-                    self.last_tps = generated as f64 / start.elapsed().as_secs_f64();
+                    // tps is not recorded here: the stream consumes `self`, so
+                    // there is no backend left for callers to read it from.
                     return None;
                 }
             }
