@@ -49,7 +49,7 @@ jobs:
           cargo run --bin edge -- --help
           cargo run --bin aios-deploy -- help
           cargo run --bin aios-security -- help
-          cargo run --bin dev -- help
+          cargo run --bin aios-dev -- help
 
   boot-test-x86_64:
     name: QEMU Boot Test (x86_64)
