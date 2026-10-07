@@ -2,6 +2,7 @@ target/
 **/*.rs.bk
 *.log
 *.gguf
+*.tokenizer.json
 
 # Upstream Redox tree: external repo with its own history, cloned pinned by
 # platform/scripts/bootstrap.sh. See platform/upstream.lock.
