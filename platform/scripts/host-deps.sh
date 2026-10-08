@@ -78,7 +78,7 @@ install_pkgs() {
   done
 }
 
-install_pkgs nasm cbindgen just
+install_pkgs nasm just
 
 # cargo install drops binaries somewhere on PATH already, so once it has run
 # the tool is findable; this exists purely so the caller gets a clear message
@@ -105,7 +105,9 @@ if ! have ninja; then
 fi
 
 # nasm and just are packaged on the runners and on every distro we target;
-# cbindgen is the one that usually has to be compiled.
+# cbindgen is the one that usually has to be compiled. It is NOT taken from
+# apt: Ubuntu's cbindgen 0.26 predates the syntax in current relibc headers
+# ("expected path" on src/header/err/mod.rs); cargo installs a recent one.
 install_from_cargo cbindgen
 install_from_cargo just
 
