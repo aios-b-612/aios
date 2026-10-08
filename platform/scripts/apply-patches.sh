@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Apply the AIOS platform overlays on top of the pinned upstream Redox tree.
 #
 # The upstream tree in redox-os/ is kept at the exact revision recorded in
@@ -206,17 +206,69 @@ sync_recipe_overlays
 # Not every arch carries patches. An absent directory means "nothing declared
 # for this target", which is a no-op for the patches section only -- the recipe
 # overlay above is arch-independent and always runs.
+#
+# Patches are organized by recipe: patch files prefixed with the recipe name
+# (e.g. "base-nvmed.patch" -> base recipe, "relibc-mmap.patch" -> relibc recipe).
+# Each recipe's patches are applied to its recipe.toml and pinned in cookbook.lock.
 
 PATCH_DIR="${PLATFORM_DIR}/patches/${ARCH}"
-PATCH_NAMES=()
+declare -A RECIPE_PATCHES
+declare -A PATCH_FILENAME
+
+# Map recipe names to their recipe.toml relative paths
+declare -A RECIPE_RELS
+RECIPE_RELS["base"]="recipes/core/base/recipe.toml"
+RECIPE_RELS["relibc"]="recipes/core/relibc/recipe.toml"
+
+# Collect patches per recipe
 if [ -d "${PATCH_DIR}" ]; then
-    while IFS= read -r p; do
+    # Map short patch name -> original filename for copying
+    declare -A PATCH_FILENAME
+
+    # Use mapfile to avoid subshell issues with associative arrays
+    mapfile -t PATCH_FILES < <(find "${PATCH_DIR}" -maxdepth 1 -name '*.patch' -type f | sort)
+
+    for p in "${PATCH_FILES[@]}"; do
         [ -n "${p}" ] || continue
-        PATCH_NAMES+=("$(basename "${p}")")
-    done < <(find "${PATCH_DIR}" -maxdepth 1 -name '*.patch' -type f | sort)
+        patch_name="$(basename "${p}")"
+        # Parse recipe prefix: "recipe-patchname.patch" -> recipe="recipe"
+        # Split on FIRST hyphen only: "relibc-mmap_and_copy-fix.patch" -> recipe="relibc", patch="mmap_and_copy-fix.patch"
+        if [[ "${patch_name}" =~ ^([a-z0-9]+)-(.+)\.patch$ ]]; then
+            recipe="${BASH_REMATCH[1]}"
+            patch_only="${BASH_REMATCH[2]}.patch"
+            if [[ -n "${RECIPE_RELS[${recipe}]:-}" ]]; then
+                # Append without leading space to avoid empty array element when splitting
+                if [ -n "${RECIPE_PATCHES[${recipe}]:-}" ]; then
+                    RECIPE_PATCHES["${recipe}"]="${RECIPE_PATCHES[${recipe}]} ${patch_only}"
+                else
+                    RECIPE_PATCHES["${recipe}"]="${patch_only}"
+                fi
+                PATCH_FILENAME["${patch_only}"]="${patch_name}"
+            else
+                log "WARNING: unknown recipe prefix in patch: ${patch_name}"
+            fi
+        else
+            # Fallback: legacy patches without prefix go to base
+            log "WARNING: patch without recipe prefix, assuming base: ${patch_name}"
+            if [ -n "${RECIPE_PATCHES[base]:-}" ]; then
+                RECIPE_PATCHES["base"]="${RECIPE_PATCHES[base]} ${patch_name}"
+            else
+                RECIPE_PATCHES["base"]="${patch_name}"
+            fi
+            PATCH_FILENAME["${patch_name}"]="${patch_name}"
+        fi
+    done
 fi
 
-if [ ${#PATCH_NAMES[@]} -eq 0 ]; then
+# If no patches at all, handle gracefully
+TOTAL_PATCHES=0
+for patches in "${RECIPE_PATCHES[@]}"; do
+    if [ -n "${patches}" ]; then
+        TOTAL_PATCHES=$((TOTAL_PATCHES + $(echo ${patches} | wc -w)))
+    fi
+done
+
+if [ ${TOTAL_PATCHES} -eq 0 ]; then
     if [ "${MODE}" = "verify" ]; then
         [ "${VERIFY_RC}" -eq 0 ] && log "no ${ARCH} patches declared; recipe overlay verified"
         exit "${VERIFY_RC}"
@@ -225,39 +277,36 @@ if [ ${#PATCH_NAMES[@]} -eq 0 ]; then
     exit 0
 fi
 
-# --- target recipe ---------------------------------------------------------
+# --- apply patches per recipe -----------------------------------------------
 
-# Each patch targets one cookbook recipe, and that recipe must also be forced to
-# the "source" rule. Adding a patch to a different recipe means adding a case
-# here.
-RECIPE_REL="recipes/core/base/recipe.toml"
-RECIPE="${REDOX_SOURCE}/${RECIPE_REL}"
-RECIPE_NAME="base"
-[ -f "${RECIPE}" ] || { err "missing recipe ${RECIPE_REL} in ${REDOX_SOURCE}"; exit 1; }
+for RECIPE_NAME in "${!RECIPE_PATCHES[@]}"; do
+    # Split patches string into array (no leading space means no empty element)
+    PATCH_NAMES=(${RECIPE_PATCHES["${RECIPE_NAME}"]})
+    RECIPE_REL="${RECIPE_RELS[${RECIPE_NAME}]}"
+    RECIPE="${REDOX_SOURCE}/${RECIPE_REL}"
+    [ -f "${RECIPE}" ] || { err "missing recipe ${RECIPE_REL} in ${REDOX_SOURCE}"; exit 1; }
 
-# --- expected recipe -------------------------------------------------------
+    # Build patches list for this recipe
+    PATCHES_TOML=""
+    for name in "${PATCH_NAMES[@]}"; do
+        if [ -z "${PATCHES_TOML}" ]; then
+            PATCHES_TOML="\"${name}\""
+        else
+            PATCHES_TOML="${PATCHES_TOML}, \"${name}\""
+        fi
+    done
 
-# Rewrite [source] so it carries the pinned rev and the patch list. Existing
-# rev/patches lines in [source] are dropped first so the result does not depend
-# on whether the overlay was already applied.
-PATCHES_TOML=""
-for name in "${PATCH_NAMES[@]}"; do
-    if [ -z "${PATCHES_TOML}" ]; then
-        PATCHES_TOML="\"${name}\""
-    else
-        PATCHES_TOML="${PATCHES_TOML}, \"${name}\""
+    # Handle base.git rev pin for aarch64 base recipe
+    rev_line=""
+    if [ "${ARCH}" = "aarch64" ] && [ "${RECIPE_NAME}" = "base" ]; then
+        base_rev="$(lock_section_value base rev)"
+        [ -n "${base_rev}" ] || { err "upstream.lock has no [base] rev; cannot pin base.git"; exit 1; }
+        rev_line="rev = \"${base_rev}\""
     fi
-done
 
-rev_line=""
-if [ "${ARCH}" = "aarch64" ]; then
-    base_rev="$(lock_section_value base rev)"
-    [ -n "${base_rev}" ] || { err "upstream.lock has no [base] rev; cannot pin base.git"; exit 1; }
-    rev_line="rev = \"${base_rev}\""
-fi
-
-expected_recipe() {
-    awk -v rev_line="${rev_line}" -v patches_line="patches = [${PATCHES_TOML}]" '
+    # Build expected recipe by rewriting [source] section
+    patches_line="patches = [${PATCHES_TOML}]"
+    awk_script='
         BEGIN { in_source = 0; done_source = 0 }
         /^\[/ {
             if (in_source) done_source = 1
@@ -277,72 +326,73 @@ expected_recipe() {
         }
         { print }
         END { if (in_source && !done_source) {} }
-    ' "${RECIPE}"
-}
+    '
+    EXPECTED="$(awk -v rev_line="${rev_line}" -v patches_line="${patches_line}" "${awk_script}" "${RECIPE}")"
 
-EXPECTED="$(expected_recipe)"
+    # --- verify ---------------------------------------------------------------
 
-# --- verify ---------------------------------------------------------------
-
-if [ "${MODE}" = "verify" ]; then
-    rc=0
-    if [ "${EXPECTED}" != "$(cat "${RECIPE}")" ]; then
-        err "recipe ${RECIPE_REL} does not carry the expected overlay"
-        rc=2
-    fi
-    for name in "${PATCH_NAMES[@]}"; do
-        src="${PATCH_DIR}/${name}"
-        dst="${REDOX_SOURCE}/recipes/core/base/${name}"
-        if [ ! -f "${dst}" ]; then
-            err "patch file missing from recipe dir: ${name}"
-            rc=2
-        elif ! cmp -s "${src}" "${dst}"; then
-            err "patch file differs from platform/patches/${ARCH}/${name}: ${name}"
+    if [ "${MODE}" = "verify" ]; then
+        rc=0
+        if [ "${EXPECTED}" != "$(cat "${RECIPE}")" ]; then
+            err "recipe ${RECIPE_REL} does not carry the expected overlay"
             rc=2
         fi
+        for name in "${PATCH_NAMES[@]}"; do
+            orig_name="${PATCH_FILENAME[${name}]:-${name}}"
+            src="${PATCH_DIR}/${orig_name}"
+            dst="${REDOX_SOURCE}/recipes/${RECIPE_NAME}/${orig_name}"
+            if [ ! -f "${dst}" ]; then
+                err "patch file missing from recipe dir: ${orig_name}"
+                rc=2
+            elif ! cmp -s "${src}" "${dst}"; then
+                err "patch file differs from platform/patches/${ARCH}/${orig_name}: ${orig_name}"
+                rc=2
+            fi
+        done
+        if ! lock_is_correct "${RECIPE_NAME}"; then
+            err "cookbook.lock does not pin ${RECIPE_NAME} to the source rule"
+            rc=2
+        fi
+        if [ "${rc}" -eq 0 ]; then
+            log "recipe ${RECIPE_NAME} overlay verified (${#PATCH_NAMES[@]} patch(es))"
+        fi
+        [ "${rc}" -lt "${VERIFY_RC}" ] && VERIFY_RC="${rc}"
+        continue
+    fi
+
+    # --- apply ----------------------------------------------------------------
+
+    # The patch files must sit next to the recipe: the cookbook resolves
+    # `patches = [...]` relative to the recipe directory.
+    for name in "${PATCH_NAMES[@]}"; do
+        orig_name="${PATCH_FILENAME[${name}]:-${name}}"
+        src="${PATCH_DIR}/${orig_name}"
+        dst="${REDOX_SOURCE}/recipes/${RECIPE_NAME}/${orig_name}"
+        if [ -f "${dst}" ] && cmp -s "${src}" "${dst}"; then
+            log "patch up to date: ${orig_name}"
+        else
+            mkdir -p "${REDOX_SOURCE}/recipes/${RECIPE_NAME}"
+            cp "${src}" "${dst}"
+            log "installed patch: ${orig_name}"
+        fi
     done
-    if ! lock_is_correct "${RECIPE_NAME}"; then
-        err "cookbook.lock does not pin ${RECIPE_NAME} to the source rule"
-        rc=2
-    fi
-    if [ "${rc}" -eq 0 ] && [ "${VERIFY_RC}" -eq 0 ]; then
-        log "overlay verified (${#PATCH_NAMES[@]} ${ARCH} patch(es), recipe overlay in sync)"
-    fi
-    [ "${rc}" -lt "${VERIFY_RC}" ] && rc="${VERIFY_RC}"
-    exit "${rc}"
-fi
 
-# --- apply -----------------------------------------------------------------
-
-# The patch files must sit next to the recipe: the cookbook resolves
-# `patches = [...]` relative to the recipe directory.
-for name in "${PATCH_NAMES[@]}"; do
-    src="${PATCH_DIR}/${name}"
-    dst="${REDOX_SOURCE}/recipes/core/base/${name}"
-    if [ -f "${dst}" ] && cmp -s "${src}" "${dst}"; then
-        log "patch up to date: ${name}"
+    if [ "${EXPECTED}" = "$(cat "${RECIPE}")" ]; then
+        log "recipe ${RECIPE_NAME} already carries the overlay"
     else
-        cp "${src}" "${dst}"
-        log "installed patch: ${name}"
+        printf '%s\n' "${EXPECTED}" > "${RECIPE}"
+        if [ -n "${rev_line}" ]; then
+            log "pinned base.git to ${base_rev:0:12} in ${RECIPE_REL}"
+        fi
+        log "added ${#PATCH_NAMES[@]} patch(es) to ${RECIPE_REL}"
     fi
-done
 
-if [ "${EXPECTED}" = "$(cat "${RECIPE}")" ]; then
-    log "recipe already carries the overlay"
-else
-    printf '%s\n' "${EXPECTED}" > "${RECIPE}"
-    if [ -n "${rev_line}" ]; then
-        log "pinned base.git to ${base_rev:0:12} in ${RECIPE_REL}"
-    fi
-    log "added ${#PATCH_NAMES[@]} patch(es) to ${RECIPE_REL}"
-fi
+    write_lock_entry "${RECIPE_NAME}"
 
-write_lock_entry "${RECIPE_NAME}"
-
-# The recipe must still be readable by the cookbook, and a patch that does not
-# apply would otherwise surface much later as an opaque build failure.
-if command -v python3 >/dev/null 2>&1; then
-    python3 - "$RECIPE" <<'PY' || { err "overlay produced an invalid recipe"; exit 1; }
+    # The recipe must still be readable by the cookbook, and a patch that does not
+    # apply would otherwise surface much later as an opaque build failure.
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$RECIPE" <<'PY' || { err "overlay produced an invalid recipe"; exit 1; }
 import sys
 try:
     import tomllib
@@ -351,6 +401,7 @@ except ModuleNotFoundError:
 with open(sys.argv[1], "rb") as fh:
     tomllib.load(fh)
 PY
-fi
+    fi
+done
 
 log "overlay applied for ${ARCH}"

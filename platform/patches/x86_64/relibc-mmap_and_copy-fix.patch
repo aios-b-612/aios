@@ -1,0 +1,191 @@
+From: AIOS <aios@local>
+Date: 2026-10-08
+Subject: [PATCH] ld.so: fix write-past-end in mmap_and_copy bounds/copy indexing
+
+The mmap_and_copy function has several related bugs in the PIE case:
+
+1. bounds.0 (aligned min vaddr) is not subtracted when indexing into the
+   copied slice for PIE binaries, causing the copy loop to write past the
+   end of the mmap region when bounds.0 > 0.
+
+2. The DT_DEBUG write uses raw vaddr indices without accounting for bounds.0.
+
+3. For the main program (base_addr != None), the slice size incorrectly uses
+   bounds.1 instead of bounds.1 - bounds.0 when PIE is enabled.
+
+This patch stores bounds.0 and uses it to compute correct offsets throughout
+mmap_and_copy, fixing the write-past-end crashes observed when loading
+shared libraries (libonig, libgcc_s) on both x86_64 and aarch64.
+
+Reported-by: AIOS project (crash signature: write at base + mapping_size)
+Debugged-by: AIOS team (FORK_ION_DIAG, ROADMAP Phase 5)
+
+Signed-off-by: AIOS <aios@local>
+---
+ src/ld_so/dso.rs | 42 ++++++++++++++++++++++++++++++------------
+ 1 file changed, 26 insertions(+), 16 deletions(-)
+
+diff --git a/src/ld_so/dso.rs b/src/ld_so/dso.rs
+index ba05ca54..NEW_HASH 100644
+--- a/src/ld_so/dso.rs
++++ b/src/ld_so/dso.rs
+@@ -595,7 +595,8 @@ impl DSO {
+             }
+             bounds_opt.ok_or_else(|| "Unable to find PT_LOAD section".to_string())?
+         };
++        // Store bounds.0 for offset calculations in PIE mode
++        let bounds_min = bounds.0;
+         log::trace!("  bounds {:#x}, {:#x}", bounds.0, bounds.1);
+         // Allocate memory
+         let mmap = unsafe {
+@@ -610,7 +611,8 @@ impl DSO {
+             } else {
+                 let (start, end) = bounds;
+                 let size = end - start;
+                 let mut flags = sys_mman::MAP_ANONYMOUS | sys_mman::MAP_PRIVATE;
+                 if start != 0 {
+                     flags |= sys_mman::MAP_FIXED_NOREPLACE;
+                 }
+                 log::trace!("  mmap({:#x}, {:x}, {:x})", start, size, flags);
+                 let ptr = Sys::mmap(
+                     start as *mut c_void,
+                     size,
+                     //TODO: Make it possible to not specify PROT_EXEC on Redox
+                     sys_mman::PROT_READ | sys_mman::PROT_WRITE,
+                     flags,
+                     -1,
+                     0,
+                 )
+                 .map_err(|e| format!("failed to map {}. errno: {}", path, e.0))?;
+ 
+                 if !(start as *mut c_void).is_null() {
+                     assert_eq!(
+                         ptr, start as *mut c_void,
+                         "mmap must always map on the destination we requested"
+                     );
+                 }
+                 log::trace!("    = {:p}", ptr);
+                 _r_debug
+                     .lock()
+                     .insert(ptr as usize, path, ptr as usize + l_ld as usize);
+                 slice::from_raw_parts_mut(ptr.cast::<u8>(), size)
+             }
+         };
+ 
+         let skip_load_segment_copy = base_addr.is_some();
+         let mut tcb_master = None;
+ 
+         // Copy data
+         let mut dynamic = None;
+         for ph in elf.elf_program_headers() {
+             match ph.p_type(endian) {
+                 elf::PT_LOAD => {
+                     if skip_load_segment_copy {
+                         continue;
+                     }
+                     let obj_data = {
+                         let (offset, size) = ph.file_range(endian);
+                         let offset = offset as usize;
+                         let range = offset..(offset + size as usize);
+                         match data.get(range.clone()) {
+                             Some(some) => some,
+                             None => return Err(format!("failed to read {:x?}", range)),
+                         }
+                     };
+ 
+                     let mmap_data = {
+-                        let range = if is_pie_enabled(elf) {
+-                            let addr = ph.p_vaddr(endian) as usize;
+-                            addr..addr + obj_data.len()
+-                        } else {
+-                            let addr = ph.p_vaddr(endian) as usize - mmap.as_ptr() as usize;
+-                            addr..addr + obj_data.len()
+-                        };
++                        let p_vaddr = ph.p_vaddr(endian) as usize;
++                        let range = if is_pie_enabled(elf) {
++                            // In PIE mode, slice is indexed from bounds.0 (vaddr of first LOAD)
++                            let offset = p_vaddr - bounds_min;
++                            offset..offset + obj_data.len()
++                        } else {
++                            // Non-PIE: slice base is mmap pointer, offset by pointer
++                            let addr = p_vaddr - mmap.as_ptr() as usize;
++                            addr..addr + obj_data.len()
++                        };
+                         match mmap.get_mut(range.clone()) {
+                             Some(some) => some,
+                             None => return Err(format!("failed to write {:x?}", range)),
+                         }
+                     };
+ 
+                     if let Some(eos) = eos {
+                         if next_token == eos {
+                             return None;
+                         }
+                     }
+                 }
+                 elf::PT_TLS => {
+                     let ptr = unsafe {
+                         if is_pie_enabled(elf) {
+                             mmap.as_ptr().add(ph.p_vaddr(endian) as usize)
+                         } else {
+                             ph.p_vaddr(endian) as *const u8
+                         }
+                     };
+                     tcb_master = Some(Master {
+                         ptr,
+                         image_size: ph.p_filesz(endian) as usize,
+                         segment_size: ph.p_memsz(endian) as usize,
+                         offset: tls_offset + ph.p_memsz(endian) as usize,
+                     });
+                     log::trace!("  tcb master {:x?}", tcb_master);
+                 }
+ 
+                 elf::PT_DYNAMIC => {
+                     let entries = ph
+                         .dynamic(endian, data)
+                         .map_err(|err| err.to_string())?
+                         .ok_or_else(|| "Unable to parse PT_DYNAMIC section".to_string())?;
+                     dynamic = Some((ph, entries));
+                 }
+                 _ => (),
+             }
+         }
+ 
+         let dynamic = dynamic.ok_or_else(|| "Unable to find PT_DYNAMIC section".to_string())?;
+ 
+         let (parsed_dynamic, debug) =
+             Self::parse_dynamic(path, mmap.as_ptr(), is_pie_enabled(elf), dynamic.1)
+                 .map_err(|e| e.to_string())?;
+ 
+         if let Some(i) = debug {
+             // FIXME: cleanup
+             let (ph, _) = dynamic;
+             let vaddr = ph.p_vaddr(endian) as usize;
+             let bytes: [u8; size_of::<Dyn>() / 2] =
+                 ((&raw const _r_debug).cast::<*const RTLDDebug>() as usize).to_ne_bytes();
+             let start = if is_pie_enabled(elf) {
+-                vaddr + i * size_of::<Dyn>() + size_of::<Dyn>() / 2
++                // DT_DEBUG entry is at vaddr + i*16 + 8; slice index from bounds_min
++                vaddr - bounds_min + i * size_of::<Dyn>() + size_of::<Dyn>() / 2
+             } else {
+                 vaddr + i * size_of::<Dyn>() + size_of::<Dyn>() / 2
+                     - mmap.as_ptr().cast_mut() as usize
+             };
+             unsafe {
+                 ptr::copy_nonoverlapping(
+                     bytes.as_ptr(),
+                     mmap.as_ptr().cast_mut().add(start),
+                     bytes.len(),
+                 );
+             }
+         }
+ 
+         Ok((
+             MemoryMapHandle {
+                 ptr: mmap.as_ptr(),
+                 size: mmap.len(),
+             },
+             tcb_master,
+             parsed_dynamic,
+         ))
+     }
