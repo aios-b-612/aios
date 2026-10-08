@@ -90,6 +90,18 @@ e o job `branch-cleanup.yml` (a cada push em `dev`/`main` + diário) apaga do
 remoto qualquer branch cujo tip já esteja em `dev`/`main` sem PR aberta.
 Trabalho em curso mantém a branch; trabalho mergeado não fica pendurado.
 
+## Autoria
+
+**O nome do assistente não aparece em commits, PRs, issues ou comentários.**
+
+- Commits: apenas o autor do git (configurado em `user.name`/`user.email`).
+- PRs: autor do git; sem `Co-authored-by` do assistente.
+- Mensagens de commit, títulos/descrições de PR, issues: voz do autor.
+- No Cursor: `attribution.attributeCommitsToAgent` e `attributePRsToAgent` em `false`.
+- No IDE: Cursor Settings → Agent → Attribution (desligado).
+
+Isso garante rastreabilidade clara e evita atribuição ambígua.
+
 ## Regras de conteúdo
 
 - **Português** para docs. **Inglês** para mensagens de commit e comentários de

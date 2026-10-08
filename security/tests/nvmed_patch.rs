@@ -42,7 +42,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn patch_text() -> String {
-    let path = repo_root().join("platform/patches/aarch64/nvmed-aarch64-poll-fence.patch");
+    let path = repo_root().join("platform/patches/aarch64/base-nvmed-aarch64-poll-fence.patch");
     std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
 }
 
