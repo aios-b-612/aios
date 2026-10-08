@@ -337,12 +337,13 @@ for RECIPE_NAME in "${!RECIPE_PATCHES[@]}"; do
             err "recipe ${RECIPE_REL} does not carry the expected overlay"
             rc=2
         fi
+        RECIPE_DIR="$(dirname "${RECIPE_REL}")"
         for name in "${PATCH_NAMES[@]}"; do
             orig_name="${PATCH_FILENAME[${name}]:-${name}}"
             src="${PATCH_DIR}/${orig_name}"
-            dst="${REDOX_SOURCE}/recipes/${RECIPE_NAME}/${orig_name}"
+            dst="${REDOX_SOURCE}/${RECIPE_DIR}/${name}"
             if [ ! -f "${dst}" ]; then
-                err "patch file missing from recipe dir: ${orig_name}"
+                err "patch file missing from recipe dir: ${name} (source ${orig_name})"
                 rc=2
             elif ! cmp -s "${src}" "${dst}"; then
                 err "patch file differs from platform/patches/${ARCH}/${orig_name}: ${orig_name}"
@@ -362,18 +363,23 @@ for RECIPE_NAME in "${!RECIPE_PATCHES[@]}"; do
 
     # --- apply ----------------------------------------------------------------
 
-    # The patch files must sit next to the recipe: the cookbook resolves
-    # `patches = [...]` relative to the recipe directory.
+    # The patch files must sit next to the recipe.toml with the SHORT name the
+    # [source] patches list declares: the cookbook resolves `patches = [...]`
+    # against the recipe directory verbatim. The recipe prefix is only how we
+    # organise platform/patches/; it is stripped on the way in. Destination is
+    # the dirname of the recipe.toml (e.g. recipes/core/relibc), NOT the bare
+    # recipe name — the group directory is part of the path.
+    RECIPE_DIR="$(dirname "${RECIPE_REL}")"
     for name in "${PATCH_NAMES[@]}"; do
         orig_name="${PATCH_FILENAME[${name}]:-${name}}"
         src="${PATCH_DIR}/${orig_name}"
-        dst="${REDOX_SOURCE}/recipes/${RECIPE_NAME}/${orig_name}"
+        dst="${REDOX_SOURCE}/${RECIPE_DIR}/${name}"
         if [ -f "${dst}" ] && cmp -s "${src}" "${dst}"; then
             log "patch up to date: ${orig_name}"
         else
-            mkdir -p "${REDOX_SOURCE}/recipes/${RECIPE_NAME}"
+            mkdir -p "${REDOX_SOURCE}/${RECIPE_DIR}"
             cp "${src}" "${dst}"
-            log "installed patch: ${orig_name}"
+            log "installed patch: ${orig_name} -> ${RECIPE_DIR}/${name}"
         fi
     done
 
