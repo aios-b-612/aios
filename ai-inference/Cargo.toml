@@ -1,0 +1,13 @@
+[package]
+name = "aios-inference"
+version.workspace = true
+edition.workspace = true
+description = "AIOS inference backends (ADR-003). First backend: Candle CPU."
+license = "MIT"
+
+[dependencies]
+aios-core = { path = "../ai-core" }
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+tokenizers = "0.21"

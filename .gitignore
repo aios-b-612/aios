@@ -1,0 +1,11 @@
+target/
+**/*.rs.bk
+*.log
+*.gguf
+
+# External repos kept out of this repo (separate git history)
+redox-os/
+platform/
+
+# Local scratch
+/tmp/
