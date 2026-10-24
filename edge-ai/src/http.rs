@@ -16,6 +16,11 @@ pub struct Request {
     /// Path without the query string.
     pub path: String,
     pub query: HashMap<String, String>,
+    /// Request headers, keys lowercased. The multipart upload route needs
+    /// `content-type` to find the boundary; before this existed it tried to
+    /// read the header out of the first body line, which never matches a real
+    /// multipart body (`--boundary`).
+    pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
 }
 
@@ -287,11 +292,15 @@ fn parse_request(head: &str, tail: Vec<u8>) -> std::io::Result<ParsedRequest> {
         None => (target.to_string(), HashMap::new()),
     };
     let mut content_length = 0usize;
+    let mut headers = HashMap::new();
     for h in lines {
         if let Some((k, v)) = h.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
-                content_length = v.trim().parse().unwrap_or(0);
+            let key = k.trim().to_ascii_lowercase();
+            let value = v.trim().to_string();
+            if key == "content-length" {
+                content_length = value.parse().unwrap_or(0);
             }
+            headers.insert(key, value);
         }
     }
     let body_cap = content_length.min(MAX_BODY);
@@ -302,6 +311,7 @@ fn parse_request(head: &str, tail: Vec<u8>) -> std::io::Result<ParsedRequest> {
             method,
             path,
             query,
+            headers,
             body,
         },
         body_cap,
@@ -357,19 +367,53 @@ pub struct Client {
 
 impl Client {
     /// Parse a base address like `127.0.0.1:8989` (host or `host:port`).
+    /// Parse a base URL.
+    ///
+    /// Accepts `host:port` (the form `DEFAULT_CLIENT_BASE` uses) and
+    /// `http://host:port`, which is what an operator copies from a browser.
+    /// The client speaks plain TCP, so `https://` is rejected instead of
+    /// silently connecting in the clear.
     pub fn from_base(base: &str) -> Result<Client, String> {
-        let (host, port) = match base.rsplit_once(':') {
-            Some((h, p)) => {
-                if h.contains(':') {
-                    // bare IPv6 address -> default port
-                    return Err(format!("IPv6 bases are not supported yet: {base}"));
-                }
-                let port: u16 = p
+        let base = base.trim();
+        let base = if let Some(rest) = base.strip_prefix("http://") {
+            rest
+        } else if base.starts_with("https://") {
+            return Err(format!(
+                "https is not supported (the edge client speaks plain HTTP): {base}"
+            ));
+        } else {
+            base
+        };
+        let base = base.trim_end_matches('/');
+
+        let (host, port) = if let Some(rest) = base.strip_prefix('[') {
+            // Bracketed IPv6 literal: [::1]:8989 or [::1].
+            let (host, after) = rest
+                .split_once(']')
+                .ok_or_else(|| format!("unclosed IPv6 literal in base '{base}'"))?;
+            let port = match after.strip_prefix(':') {
+                Some(p) => p
                     .parse()
-                    .map_err(|_| format!("bad port in base '{base}'"))?;
-                (h.to_string(), port)
+                    .map_err(|_| format!("bad port in base '{base}'"))?,
+                None if after.is_empty() => super::DEFAULT_PORT,
+                None => return Err(format!("bad base '{base}'")),
+            };
+            (host.to_string(), port)
+        } else {
+            match base.rsplit_once(':') {
+                Some((h, p)) if !h.contains(':') => {
+                    let port = p
+                        .parse()
+                        .map_err(|_| format!("bad port in base '{base}'"))?;
+                    (h.to_string(), port)
+                }
+                Some(_) => {
+                    return Err(format!(
+                        "IPv6 bases must use brackets, e.g. [::1]:8989: {base}"
+                    ))
+                }
+                None => (base.to_string(), super::DEFAULT_PORT),
             }
-            None => (base.to_string(), super::DEFAULT_PORT),
         };
         Ok(Client {
             host,
@@ -396,9 +440,16 @@ impl Client {
         if target.is_empty() {
             target.push('/');
         }
+        // Bracketed form for IPv6 in the Host header, per RFC 3986; the
+        // connect call below uses the bare address.
+        let host_header = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
         let mut head = format!(
             "{method} {target} HTTP/1.1\r\nHost: {}:{}\r\nUser-Agent: edge-cli\r\nAccept: application/json\r\n",
-            self.host, self.port
+            host_header, self.port
         );
         if let Some(ref cookie) = self.cookie {
             head.push_str(&format!("Cookie: {cookie}\r\n"));
@@ -471,11 +522,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn from_base_accepts_host_port_and_http_url() {
+        for base in [
+            "127.0.0.1:8989",
+            "http://127.0.0.1:8989",
+            "http://127.0.0.1:8989/",
+        ] {
+            let c = Client::from_base(base).unwrap_or_else(|e| panic!("{base}: {e}"));
+            assert_eq!(c.host, "127.0.0.1", "{base}");
+            assert_eq!(c.port, 8989, "{base}");
+        }
+
+        let c = Client::from_base("http://edge1").expect("default port");
+        assert_eq!(c.host, "edge1");
+        assert_eq!(c.port, crate::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn from_base_rejects_https_and_bare_ipv6() {
+        assert!(Client::from_base("https://edge1:8989").is_err());
+        assert!(Client::from_base("::1:8989").is_err());
+
+        let c = Client::from_base("http://[::1]:8989").expect("bracketed IPv6");
+        assert_eq!(c.host, "::1");
+        assert_eq!(c.port, 8989);
+    }
+
+    #[test]
     fn parses_query_and_decode() {
         let q = parse_query("model=my%20model&tokens=32&flag");
         assert_eq!(q.get("model").map(|s| s.as_str()), Some("my model"));
         assert_eq!(q.get("tokens").map(|s| s.as_str()), Some("32"));
         assert_eq!(q.get("flag").map(|s| s.as_str()), Some(""));
+    }
+
+    #[test]
+    fn parse_request_keeps_headers_for_multipart_boundaries() {
+        let head = "POST /api/models/upload HTTP/1.1\r\n\
+                    Content-Type: multipart/form-data; boundary=abc123\r\n\
+                    Content-Length: 3\r\n\r\n";
+        let parsed = parse_request(head, b"xyz".to_vec()).expect("parse");
+        assert_eq!(parsed.inner.body, b"xyz");
+        assert_eq!(
+            parsed.inner.headers.get("content-type").map(String::as_str),
+            Some("multipart/form-data; boundary=abc123")
+        );
+        assert_eq!(
+            parsed
+                .inner
+                .headers
+                .get("content-length")
+                .map(String::as_str),
+            Some("3")
+        );
     }
 
     #[test]

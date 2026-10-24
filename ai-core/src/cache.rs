@@ -106,7 +106,18 @@ pub fn install_model(src: &Path, dir: &Path, name: &str) -> Result<RegistryEntry
     let sha256 = sha256_hex(reader)?;
     let size_bytes = fs::metadata(src)?.len();
 
-    fs::copy(src, &dest)?;
+    // `install_model` is also the "register this file" path: the edge daemon
+    // writes an upload straight into the cache and then calls this function
+    // with `src == dest`. `fs::copy` opens the destination with O_TRUNC, so
+    // copying a file onto itself truncates it to zero bytes. Skip the copy
+    // when both paths resolve to the same file.
+    let same_file = match (fs::canonicalize(src), fs::canonicalize(&dest)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    };
+    if !same_file {
+        fs::copy(src, &dest)?;
+    }
 
     Ok(RegistryEntry {
         name: name.to_string(),
@@ -197,6 +208,29 @@ mod tests {
 
         remove_model(&e, &cache).unwrap();
         assert!(!Path::new(&e.path).exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_from_the_cache_path_does_not_truncate_the_model() {
+        let dir = unique_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src.gguf");
+        fs::write(&src, minimal_gguf_bytes()).unwrap();
+
+        let cache = dir.join("cache");
+        let first = install_model(&src, &cache, "demo").unwrap();
+        let dest = PathBuf::from(&first.path);
+        let before = fs::metadata(&dest).unwrap().len();
+
+        // The edge daemon writes an upload into the cache and then registers
+        // that same path. This used to truncate the file, because fs::copy
+        // opened the destination with O_TRUNC while it was also the source.
+        let again = install_model(&dest, &cache, "demo").unwrap();
+        assert_eq!(fs::metadata(&dest).unwrap().len(), before);
+        assert_eq!(again.size_bytes, before);
+        assert_eq!(again.sha256, first.sha256);
+
         let _ = fs::remove_dir_all(&dir);
     }
 

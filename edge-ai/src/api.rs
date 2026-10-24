@@ -2,10 +2,11 @@
 //! and metrics, plus the HTML control panel at `/`.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aios_core::{default_models_dir, gguf, pretty_bytes, sha256_hex};
+use aios_core::{default_models_dir, gguf, pretty_bytes, sha256_hex, Registry};
 use serde_json::json;
 
 use crate::http::{Request, Response};
@@ -46,6 +47,29 @@ fn now() -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Where the previous version of a model is kept so a failed deploy can be
+/// rolled back. A dot-directory keeps it out of `find_models`, which walks
+/// `.gguf` files, and therefore out of the model list.
+fn backup_dir(models_dir: &Path) -> PathBuf {
+    models_dir.join(".backup")
+}
+
+fn backup_path(models_dir: &Path, name: &str) -> PathBuf {
+    backup_dir(models_dir).join(format!("{name}.gguf"))
+}
+
+/// Reject names that could escape the models directory. `install_model`
+/// validates too, but the upload path builds paths before it gets there.
+fn validate_model_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("empty model name".into());
+    }
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err(format!("invalid model name {name:?}"));
+    }
+    Ok(())
+}
+
 fn handle(rt: &Runtime, upload_state: &Arc<Mutex<UploadState>>, req: &Request) -> Response {
     match (req.method.as_str(), req.path.as_str()) {
         ("GET", "/") => Response::html(200, panel::index()),
@@ -61,6 +85,7 @@ fn handle(rt: &Runtime, upload_state: &Arc<Mutex<UploadState>>, req: &Request) -
         // Model upload endpoints (chunked multipart)
         ("POST", "/api/models/upload") => upload_chunk(upload_state, req),
         ("POST", "/api/models/upload/finalize") => upload_finalize(rt, upload_state, req),
+        ("POST", "/api/models/rollback") => rollback_model(rt, req),
         (m, p) => Response::error(404, &format!("not found: {m} {p}")),
     }
 }
@@ -331,55 +356,34 @@ fn parse_multipart_field(body: &[u8], field_name: &str) -> Option<String> {
     })
 }
 
-/// Parse multipart chunk data from the request body.
-fn parse_multipart_chunk(body: &[u8], boundary: &str) -> Option<Vec<u8>> {
-    let boundary_marker = format!("\r\n--{}\r\n", boundary);
-    let boundary_end = format!("\r\n--{}--\r\n", boundary);
-    let body_vec = body;
-
-    // Find the chunk part (the part with file data)
-    if let Some(chunk_start) = body_vec
-        .windows(boundary_marker.len())
-        .position(|w| w == boundary_marker.as_bytes())
-    {
-        let after_boundary = &body_vec[chunk_start + boundary_marker.len()..];
-        // Skip headers to find the data
-        if let Some(header_end_pos) = after_boundary.windows(4).position(|w| w == b"\r\n\r\n") {
-            let data_start = header_end_pos + 4;
-            // Find next boundary or end boundary
-            let remaining = &after_boundary[data_start..];
-            if let Some(next_boundary) = remaining
-                .windows(boundary_marker.len())
-                .position(|w| w == boundary_marker.as_bytes())
-            {
-                let mut chunk = remaining[..next_boundary].to_vec();
-                if chunk.ends_with(b"\r\n") {
-                    chunk.truncate(chunk.len() - 2);
-                }
-                return Some(chunk);
-            } else if let Some(end_pos) = remaining
-                .windows(boundary_end.len())
-                .position(|w| w == boundary_end.as_bytes())
-            {
-                let mut chunk = remaining[..end_pos].to_vec();
-                if chunk.ends_with(b"\r\n") {
-                    chunk.truncate(chunk.len() - 2);
-                }
-                return Some(chunk);
-            }
-        }
+/// Parse the binary chunk out of a multipart body.
+///
+/// The first part of every upload is the `chunk` field, so the data sits
+/// between the end of that part's headers and the next `\r\n--` boundary.
+/// The earlier implementation searched for `\r\n--boundary\r\n` first, which
+/// only matches the separator *after* the first part, and then treated the
+/// text fields that follow it as the chunk data. That is why a real upload
+/// assembled a chunk that did not match the file the client sent.
+fn parse_multipart_chunk(body: &[u8], _boundary: &str) -> Option<Vec<u8>> {
+    let header_end = body.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let data_start = header_end + 4;
+    let remaining = &body[data_start..];
+    let end = remaining
+        .windows(4)
+        .position(|w| w == b"\r\n--")
+        .unwrap_or(remaining.len());
+    let mut chunk = remaining[..end].to_vec();
+    if chunk.ends_with(b"\r\n") {
+        chunk.truncate(chunk.len() - 2);
     }
-    None
+    Some(chunk)
 }
 
 fn upload_chunk(upload_state: &Arc<Mutex<UploadState>>, req: &Request) -> Response {
-    // Extract content-type and boundary
-    let content_type = req
-        .body
-        .windows(2)
-        .position(|w| w == b"\r\n")
-        .and_then(|pos| String::from_utf8(req.body[..pos].to_vec()).ok())
-        .unwrap_or_default();
+    // The boundary lives in the request header, not in the body: a real
+    // multipart body starts with `--boundary`, so reading the first body line
+    // as a header always produced "missing multipart boundary".
+    let content_type = req.headers.get("content-type").cloned().unwrap_or_default();
 
     let boundary = content_type
         .split("boundary=")
@@ -499,20 +503,54 @@ fn upload_finalize(
         );
     }
 
-    // Save to models directory
-    let models_dir = aios_core::default_models_dir();
-    let model_path = std::path::Path::new(&models_dir).join(format!("{}.gguf", model_name));
-    if let Err(e) = std::fs::write(&model_path, &model_data) {
+    // Save to a temporary file first. Writing straight to the destination and
+    // then calling `install_model` on it is the same-path case that used to
+    // truncate the model (fs::copy opens the destination with O_TRUNC).
+    if let Err(e) = validate_model_name(&model_name) {
+        return Response::error(400, &e);
+    }
+    let models_dir = PathBuf::from(aios_core::default_models_dir());
+    if let Err(e) = std::fs::create_dir_all(&models_dir) {
+        return Response::error(500, &format!("create models dir failed: {e}"));
+    }
+    let dest = aios_core::cache_path_for(&models_dir, &model_name);
+    let temp = models_dir.join(format!(".upload-{model_name}.part"));
+    if let Err(e) = std::fs::write(&temp, &model_data) {
         return Response::error(500, &format!("write model failed: {e}"));
     }
 
-    // Register in aios-core registry
-    let entry =
-        match aios_core::install_model(&model_path, std::path::Path::new(&models_dir), &model_name)
-        {
-            Ok(e) => e,
-            Err(e) => return Response::error(500, &format!("registry install failed: {e}")),
-        };
+    // Keep the previous version so a failed health check can be rolled back.
+    // Rename rather than copy: a 4 GB model would otherwise be duplicated on
+    // a device that has little free space to begin with.
+    let backup = backup_path(&models_dir, &model_name);
+    let had_previous = dest.is_file();
+    if had_previous {
+        if let Err(e) = std::fs::create_dir_all(backup_dir(&models_dir)) {
+            let _ = std::fs::remove_file(&temp);
+            return Response::error(500, &format!("create backup dir failed: {e}"));
+        }
+        let _ = std::fs::remove_file(&backup);
+        if let Err(e) = std::fs::rename(&dest, &backup) {
+            let _ = std::fs::remove_file(&temp);
+            return Response::error(500, &format!("backup previous model failed: {e}"));
+        }
+    }
+
+    // Register in aios-core registry. `install_model` copies the temp file
+    // into the cache and validates the GGUF header.
+    let entry = match aios_core::install_model(&temp, &models_dir, &model_name) {
+        Ok(e) => {
+            let _ = std::fs::remove_file(&temp);
+            e
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp);
+            if had_previous {
+                let _ = std::fs::rename(&backup, &dest);
+            }
+            return Response::error(500, &format!("registry install failed: {e}"));
+        }
+    };
 
     // Add to runtime's model cache
     if let Err(e) = rt.register_model(entry) {
@@ -529,9 +567,78 @@ fn upload_finalize(
         &json!({
             "status": "model installed",
             "model": model_name,
-            "path": model_path.display().to_string(),
+            "path": dest.display().to_string(),
             "size": model_data.len(),
-            "sha256": computed_sha256
+            "sha256": computed_sha256,
+            "backup": had_previous
+        }),
+    )
+}
+
+/// Restore the model that was replaced by the last deploy.
+///
+/// The daemon keeps one backup per model name (`<models>/.backup/<name>.gguf`).
+/// A deploy that transfers but fails its health check leaves the device with a
+/// model it cannot serve; this route puts the previous file and registry entry
+/// back so the device returns to a working state.
+fn rollback_model(rt: &Runtime, req: &Request) -> Response {
+    let body: serde_json::Value = match req.json() {
+        Ok(v) => v,
+        Err(e) => return Response::error(400, &e),
+    };
+    let model_name = match body.get("name").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return Response::error(400, "missing name"),
+    };
+    if let Err(e) = validate_model_name(&model_name) {
+        return Response::error(400, &e);
+    }
+
+    let models_dir = PathBuf::from(aios_core::default_models_dir());
+    let backup = backup_path(&models_dir, &model_name);
+    if !backup.is_file() {
+        return Response::error(
+            404,
+            &format!("no backup for model '{model_name}'; nothing to roll back"),
+        );
+    }
+
+    let dest = aios_core::cache_path_for(&models_dir, &model_name);
+    let _ = std::fs::remove_file(&dest);
+    if let Ok(mut reg) = Registry::load(aios_core::default_registry_file()) {
+        if reg.remove(&model_name) {
+            let _ = reg.save();
+        }
+    }
+
+    // Move the backup out of the way first: install_model must not see
+    // src == dest (that is the same-path case that truncates the file).
+    let temp = models_dir.join(format!(".rollback-{model_name}.part"));
+    if let Err(e) = std::fs::rename(&backup, &temp) {
+        return Response::error(500, &format!("restore backup failed: {e}"));
+    }
+    let entry = match aios_core::install_model(&temp, &models_dir, &model_name) {
+        Ok(e) => {
+            let _ = std::fs::remove_file(&temp);
+            e
+        }
+        Err(e) => {
+            let _ = std::fs::rename(&temp, &backup);
+            return Response::error(500, &format!("reinstall backup failed: {e}"));
+        }
+    };
+    if let Err(e) = rt.register_model(entry.clone()) {
+        return Response::error(500, &format!("runtime register failed: {e}"));
+    }
+
+    Response::json(
+        200,
+        &json!({
+            "status": "rolled_back",
+            "model": entry.name,
+            "path": entry.path,
+            "sha256": entry.sha256,
+            "size": entry.size_bytes
         }),
     )
 }
@@ -659,4 +766,81 @@ fn chat_completions(rt: &Runtime, req: &Request) -> Response {
             }
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gguf(tag: u8) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(b"GGUF");
+        b.extend_from_slice(&1u32.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes()); // tensor count
+        b.extend_from_slice(&0u64.to_le_bytes()); // metadata kv count
+        b.push(tag);
+        b
+    }
+
+    fn request(body: &str) -> Request {
+        Request {
+            method: "POST".into(),
+            path: "/api/models/rollback".into(),
+            query: HashMap::new(),
+            headers: HashMap::new(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn validate_model_name_rejects_path_escapes() {
+        for bad in ["", ".", "..", "../x", "a/b", "a\\b"] {
+            assert!(
+                validate_model_name(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+        assert!(validate_model_name("tinyllama-1.1b.Q4_K_M").is_ok());
+    }
+
+    #[test]
+    fn rollback_restores_the_previous_model() {
+        // This is the only test in this binary that reads the two env vars,
+        // and no other edge-ai test touches them.
+        let root = std::env::temp_dir().join(format!("aios-api-rollback-{}", std::process::id()));
+        let models = root.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        std::env::set_var("AIOS_MODELS_DIR", &models);
+        std::env::set_var("AIOS_REGISTRY", root.join("registry.tsv"));
+
+        let name = "demo";
+        let dest = aios_core::cache_path_for(&models, name);
+        let previous = gguf(1);
+        let replacement = gguf(2);
+        std::fs::write(&dest, &previous).unwrap();
+
+        let rt = Runtime::new();
+
+        // No backup: the route must say so instead of pretending it rolled
+        // back.
+        let resp = rollback_model(&rt, &request(r#"{"name":"demo"}"#));
+        assert_eq!(resp.status, 404);
+
+        // Simulate what upload_finalize does before installing a replacement.
+        std::fs::create_dir_all(backup_dir(&models)).unwrap();
+        std::fs::rename(&dest, backup_path(&models, name)).unwrap();
+        std::fs::write(&dest, &replacement).unwrap();
+
+        let resp = rollback_model(&rt, &request(r#"{"name":"demo"}"#));
+        assert_eq!(
+            resp.status,
+            200,
+            "body: {}",
+            String::from_utf8_lossy(&resp.body)
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), previous);
+        assert!(!backup_path(&models, name).exists());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
