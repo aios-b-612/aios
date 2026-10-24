@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Runtime edge-ai — componentes e dados",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "http-path", "label": "Caminho HTTP", "focus": ["clients", "daemon", "runtime", "core", "store"], "note": "Da requisição HTTP ao arquivo de modelo em disco." },
+      { "id": "sampling", "label": "Threads do daemon", "focus": ["sampler", "runtime", "daemon"], "note": "Amostras de sistema alimentam o histórico do runtime." }
+    ]
+  },
+  "components": [
+    { "id": "clients", "type": "external", "label": "Clientes", "sublabel": "edge CLI · apps · navegador", "tag": "HTTP", "pos": [20, 300], "size": [145, 72] },
+    { "id": "daemon", "type": "backend", "label": "Daemon edge-ai", "sublabel": "HTTP 127.0.0.1:8989", "tag": "bind-first", "pos": [240, 300], "size": [175, 72] },
+    { "id": "sampler", "type": "backend", "label": "Sampler (thread)", "sublabel": "CPU · RAM · rede", "tag": "a cada N s", "pos": [490, 100], "size": [165, 64] },
+    { "id": "runtime", "type": "backend", "label": "Runtime", "sublabel": "cache de 1 modelo", "tag": "stats · rings", "pos": [490, 300], "size": [165, 72] },
+    { "id": "core", "type": "backend", "label": "Libs AIOS", "sublabel": "aios-core · ai-inference", "tag": "Candle CPU", "pos": [730, 300], "size": [155, 72] },
+    { "id": "store", "type": "database", "label": "Dados locais", "sublabel": "models/ · registry.tsv", "tag": "/var/lib/ai", "pos": [960, 300], "size": [145, 72] }
+  ],
+  "connections": [
+    { "id": "http", "from": "clients", "to": "daemon", "label": "HTTP :8989", "variant": "emphasis" },
+    { "id": "handler", "from": "daemon", "to": "runtime", "label": "rt.infer()" },
+    { "id": "resolve", "from": "runtime", "to": "core", "label": "resolve id" },
+    { "id": "io", "from": "core", "to": "store", "label": "lê/escreve" },
+    { "id": "samples", "from": "sampler", "to": "runtime", "label": "push amostras", "fromSide": "bottom", "toSide": "top", "labelAt": [573, 214] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "API HTTP", "items": ["GET /api/health · /api/models · /api/logs · /api/metrics", "POST /api/infer: prompt, model?, max_tokens", "GET /api/benchmark: parse GGUF + SHA-256 + tokens/s", "GET / serve o painel HTML do daemon"] },
+    { "dot": "emerald", "title": "Runtime", "items": ["Cache de 1 modelo em memória (CandleBackend)", "Mesmo modelo: load_ms = 0 (cached=true)", "Trocar de modelo recarrega (load_ms real)", "Stats: requests · errors · tokens · last_tps"] },
+    { "dot": "violet", "title": "Dados & ambiente", "items": ["/var/lib/ai/models (chmod 1777 — ADR-017)", "registry.tsv: nome → path, sha256, bytes", "Env: AIOS_MODELS_DIR · AIOS_REGISTRY · EDGE_BASE_URL"] }
+  ]
+}

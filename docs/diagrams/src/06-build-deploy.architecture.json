@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Build, Deploy e Operação no Edge",
+    "quality_profile": "showcase",
+    "viewBox": [1300, 600],
+    "views": [
+      {
+        "id": "full-pipeline",
+        "label": "Pipeline",
+        "focus": ["dev", "cross-build", "imagem", "canary-qemu", "edge"],
+        "note": "Do código ao dispositivo: cross-build Redox, imagem A/B, canário QEMU, edge bind-first."
+      }
+    ]
+  },
+  "components": [
+    { "id": "dev", "type": "frontend", "label": "Código fonte", "sublabel": "aios repo", "pos": [50, 100], "size": [140, 70], "tag": "Fase 1–3" },
+    { "id": "cross-build", "type": "backend", "label": "Cross-build", "sublabel": "x86_64-redox", "pos": [250, 100], "size": [160, 70] },
+    { "id": "testes", "type": "security", "label": "Testes", "sublabel": "unit + integração", "pos": [470, 100], "size": [160, 70], "tag": "blocking" },
+    { "id": "imagem", "type": "cloud", "label": "Imagem A/B", "sublabel": "MANIFEST + lock", "pos": [690, 100], "size": [160, 70], "tag": "ADR-022" },
+    { "id": "ai-edge", "type": "cloud", "label": "Perfil edge", "sublabel": "daemon only", "pos": [910, 100], "size": [160, 70], "tag": "Fase 4–5" },
+    { "id": "canary-qemu", "type": "security", "label": "Canário QEMU", "sublabel": "boot + smoke", "pos": [470, 250], "size": [160, 70], "tag": "gate" },
+    { "id": "edge", "type": "database", "label": "Dispositivo Edge", "sublabel": "daemon :8989", "pos": [910, 250], "size": [180, 70], "tag": "Fase 4–5" },
+    { "id": "netstack-blocker", "type": "security", "label": "Netstack blocker", "sublabel": "Fase 5 travada", "pos": [910, 350], "size": [160, 70], "tag": "ROADMAP" }
+  ],
+  "connections": [
+    { "from": "dev", "to": "cross-build", "label": "git push", "variant": "emphasis", "labelAt": [145, 184] },
+    { "from": "cross-build", "to": "testes", "label": "ELF", "labelAt": [370, 184] },
+    { "from": "testes", "to": "imagem", "label": "assemble", "variant": "emphasis", "labelAt": [590, 184] },
+    { "from": "imagem", "to": "ai-edge", "label": "perfil edge", "variant": "emphasis", "labelAt": [805, 184] },
+    { "from": "ai-edge", "to": "canary-qemu", "label": "qemu-img", "variant": "emphasis", "route": "orthogonal-v", "labelAt": [910, 184] },
+    { "from": "imagem", "to": "canary-qemu", "label": "qemu-img dev", "route": "orthogonal-v", "labelAt": [585, 184] },
+    { "from": "canary-qemu", "to": "edge", "label": "smoke OK", "variant": "emphasis", "route": "orthogonal-h", "labelAt": [700, 234] },
+    { "from": "canary-qemu", "to": "netstack-blocker", "label": "netstack fail", "variant": "security", "route": "orthogonal-v", "labelAt": [585, 334] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Cross-build Redox",
+      "items": [
+        "scripts/build-redox.sh → cargo build --target x86_64-unknown-redox",
+        "Target Tier 2, redox-os/ fork em platform/"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Imagem A/B (ADR-022)",
+      "items": [
+        "platform/dist/MANIFEST.txt + upstream.lock",
+        "Perfis: ai-developer (full) e ai-edge (daemon only)"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Validação & Edge",
+      "items": [
+        "Canário QEMU: boot → /api/health → infer smoke",
+        "edge-ai daemon bind-first 127.0.0.1:8989",
+        "Netstack Redox incompleto = blocker Fase 5"
+      ]
+    }
+  ]
+}

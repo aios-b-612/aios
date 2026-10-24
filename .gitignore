@@ -16,3 +16,6 @@ platform/dist/
 
 # Local scratch
 /tmp/
+
+# Local artifacts
+aios-models.tar

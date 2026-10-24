@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Fluxo de inferência — POST /api/infer",
+    "viewBox": [1040, 520],
+    "column_fit": "spread",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "request", "label": "Requisição", "focus": ["client", "http", "rt", "store"], "note": "Entrada JSON e resolução do modelo local." },
+      { "id": "inference", "label": "Carga e inferência", "focus": ["rt", "backend", "store"], "note": "Cache de 1 modelo, load_ms e geração." },
+      { "id": "response", "label": "Resposta", "focus": ["backend", "rt", "http", "client"], "note": "Métricas retornam no JSON da API." }
+    ]
+  },
+  "participants": [
+    { "id": "client", "type": "external", "label": "Cliente HTTP", "sublabel": "edge CLI · apps" },
+    { "id": "http", "type": "backend", "label": "Daemon edge-ai", "sublabel": "handler :8989" },
+    { "id": "rt", "type": "backend", "label": "Runtime", "sublabel": "cache 1 modelo" },
+    { "id": "backend", "type": "backend", "label": "CandleBackend", "sublabel": "ai-inference" },
+    { "id": "store", "type": "database", "label": "Dados locais", "sublabel": "models/ · registry.tsv" }
+  ],
+  "segments": [
+    { "from": 150, "to": 244, "label": "Requisição" },
+    { "from": 252, "to": 370, "label": "Resolução e inferência" },
+    { "from": 372, "to": 472, "label": "Resposta" }
+  ],
+  "messages": [
+    { "id": "post-infer", "from": "client", "to": "http", "y": 160, "label": "POST /api/infer", "variant": "emphasis" },
+    { "id": "call-infer", "from": "http", "to": "rt", "y": 186, "label": "infer(modelo, prompt, N)" },
+    { "id": "resolve", "from": "rt", "to": "store", "y": 212, "label": "resolve modelo" },
+    { "id": "path", "from": "store", "to": "rt", "y": 240, "label": "path local", "variant": "return" },
+    { "id": "load", "from": "rt", "to": "backend", "y": 268, "label": "load_only (se miss)", "variant": "dashed" },
+    { "id": "generate", "from": "rt", "to": "backend", "y": 296, "label": "generate(prompt, N)", "variant": "emphasis" },
+    { "id": "text-tps", "from": "backend", "to": "rt", "y": 324, "label": "texto · tokens/s", "variant": "return" },
+    { "id": "inferout", "from": "rt", "to": "http", "y": 352, "label": "InferOut (tps · load_ms)", "variant": "return" },
+    { "id": "json", "from": "http", "to": "client", "y": 380, "label": "200 JSON (text · tps · cached)", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "client", "from": 160, "to": 386, "type": "external" },
+    { "participant": "http", "from": 160, "to": 386, "type": "backend" },
+    { "participant": "rt", "from": 186, "to": 358, "type": "backend" },
+    { "participant": "store", "from": 212, "to": 246, "type": "database" },
+    { "participant": "backend", "from": 268, "to": 330, "type": "backend" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Roteamento", "items": ["modelo é opcional: sem ele, usa o maior instalado", "resolve: arquivo → registry.tsv → cache", "apps externos usam o mesmo endpoint (ver diagrama 04)"] },
+    { "dot": "emerald", "title": "Carga", "items": ["cache de 1 modelo: mesmo path → load_ms = 0", "trocar de modelo recarrega do disco", "load_ms medido em CandleBackend.load_model"] },
+    { "dot": "rose", "title": "Erros", "items": ["400: prompt ausente", "503: nenhum modelo disponível", "500: falha de parse GGUF ou generate"] }
+  ]
+}

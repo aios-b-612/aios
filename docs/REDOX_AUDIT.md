@@ -174,17 +174,21 @@ Regras importantes:
 | Item | Estado |
 |---|---|
 | Suporte kernel aarch64 | Sim, boot via UEFI (kernel `aarch64-unknown-redox`) |
-| QEMU aarch64 (virt) | Boot UEFI → bootloader → kernel OK. **Userland parcialmente desbloqueada (2026‑09‑27)**: o init do nvmed completa, os dois discos NVMe são reconhecidos e a sequência chega ao prompt de login. As fences `Acquire/Release` em `queues.rs` e o modo polling no executor resolvem o driver. **Sem correção para o bloqueio restante**: filho de um pai multi-threaded (`ion` a fazer fork/exec, por exemplo `cat`) aborta com `Not an SVC induced synchronous exception (ty=111100)` / `ESR_EL1=0xF2000001` (`brk #1` do `verify()` do relibc, em `libc+0x139A9C`). A teoria da flag `tpidr_el1+368` foi retratada. Relatório: `docs/FORK_ION_DIAG.md`. Upstream não tem CI de boot aarch64 (só `repo-tree`). |
+| QEMU aarch64 (virt) | Boot UEFI → bootloader → kernel OK; **userland bloqueado no master (corrigido em 2026‑09‑25)**: causa raiz era falta de fences de ordering DMA + IRQ não entregue em aarch64; resolvido com fences `Acquire/Release` em `queues.rs` + modo polling no executor (`set_poll_mode(true)`). Agora o init do nvmed completa, ambos os discos NVMe são reconhecidos e a userland avança para o prompt de login. Upstream não tem CI de boot aarch64 (só `repo-tree`). |
+| QEMU `raspi4b` (aarch64) | **Boot completo validado (2026-10-16)**: u-boot → kernel → userland → `redox login:` → shell `root`; driver real de SD (`bcm2835-sdhcid`, EMMC2 via mux do GPIO em `0x7e300000`) lê o cartão de 2 GiB. Usa DT com `emmc2` remapeado para o controlador com cartão (ajuste QEMU-only, não entra no produto). Evidência: `docs/evidence/pi4/probe6-boot-completo.log` e `probe7b-login-shell.log`. |
 | Raspberry Pi 3 Model B+ | **Reportado como "Booting"** na HARDWARE.md (0.8.0, server, ARM64, console UART pl011) |
-| Raspberry Pi 4 | **NÃO listado** — nenhum suporte validado |
+| Raspberry Pi 4 | Caminho aarch64 do produto **validado em QEMU `raspi4b`** (2026-10-16, até login/shell com driver real de SD); **boot em hardware real pendente** (gravação do cartão SD + console UART) |
 | Raspberry Pi 5 | **NÃO listado** — nenhum suporte validado |
 | GPIO | Não há driver de GPIO genérico validado |
 | VideoCore/GPU do Pi | Sem suporte de aceleração |
 | Wi-Fi | **NÃO suportado** (explicitado na HARDWARE.md) |
 | Bluetooth | **NÃO suportado** |
-| Configs existentes | `config/aarch64/ci.toml`, `config/aarch64/demo.toml`, `config/aarch64/dev.toml`, `config/aarch64/redoxer.toml`, `config/aarch64/raspi3bp/minimal.toml` |
+| Configs existentes | `config/aarch64/ci.toml`, `config/aarch64/demo.toml`, `config/aarch64/dev.toml`, `config/aarch64/redoxer.toml`, `config/aarch64/raspi3bp/minimal.toml`, `config/aarch64/aios.toml` (produto), `config/aarch64/raspi4bp/pi4.toml` (Pi 4B) |
 | Firmware Pi | Via U-Boot (rastro: `config/aarch64/ci.toml` refere-se a `redox_firmware` GitLab) |
 | Console serial | pl011 UART funcionando no Pi 3B+ |
+| PCIe / `pcid` | Sem nó `pci-host-ecam-generic` no DT do raspi4b → `pcid` cai no fallback e panica em aarch64 (`todo!()`); `pcid-spawner` sai com `ENODEV` (sem `/scheme/pci`) |
+| Rede (raspi4b) | Sem driver GENET/mailbox → sem NIC; `netstack` sem interface; `edge-ai` falha `ENODEV` (gap igual no QEMU) |
+| Crate `fdt` | **Vendorizada** em `patches/fdt/` (fix dos tokens NOP do libfdt) + `[patch]` em kernel/base/bootloader — ver ADR-023 |
 
 ### 2.13 Rust toolchain no Redox
 

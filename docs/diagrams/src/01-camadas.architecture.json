@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AIOS — Camadas do sistema",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "device-path",
+        "label": "Caminho do dispositivo",
+        "focus": [
+          "hw",
+          "redox",
+          "core",
+          "daemon",
+          "edgeos",
+          "apps_edge"
+        ],
+        "note": "Do hardware ao app servido pela API local."
+      },
+      {
+        "id": "shared-platform",
+        "label": "Plataforma compartilhada",
+        "focus": [
+          "core",
+          "clis",
+          "daemon",
+          "devos",
+          "edgeos"
+        ],
+        "note": "Uma plataforma Rust, dois perfis de imagem."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "hw",
+      "type": "external",
+      "label": "Hardware alvo",
+      "sublabel": "x86_64 · aarch64 · RPi 3B+",
+      "pos": [
+        30,
+        330
+      ],
+      "size": [
+        140,
+        72
+      ],
+      "tag": "CPU-only"
+    },
+    {
+      "id": "redox",
+      "type": "external",
+      "label": "Redox OS upstream",
+      "sublabel": "kernel + userland + toolchain",
+      "tag": "passivo (ADR-014)",
+      "pos": [
+        238,
+        330
+      ],
+      "size": [
+        158,
+        72
+      ]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "AIOS Core & Runtime",
+      "sublabel": "aios-core · ai-inference · Candle",
+      "tag": "este repo",
+      "pos": [
+        455,
+        330
+      ],
+      "size": [
+        175,
+        72
+      ]
+    },
+    {
+      "id": "clis",
+      "type": "frontend",
+      "label": "CLIs & SDK",
+      "sublabel": "ai · edge · aios-sdk",
+      "pos": [
+        455,
+        105
+      ],
+      "size": [
+        150,
+        64
+      ]
+    },
+    {
+      "id": "daemon",
+      "type": "backend",
+      "label": "Daemon edge-ai",
+      "sublabel": "HTTP 127.0.0.1:8989",
+      "pos": [
+        698,
+        330
+      ],
+      "size": [
+        160,
+        64
+      ]
+    },
+    {
+      "id": "devos",
+      "type": "backend",
+      "label": "Developer OS",
+      "sublabel": "perfil ai-developer",
+      "tag": "desktop/dev",
+      "pos": [
+        700,
+        105
+      ],
+      "size": [
+        155,
+        64
+      ]
+    },
+    {
+      "id": "edgeos",
+      "type": "backend",
+      "label": "Edge AI OS",
+      "sublabel": "perfil ai-edge · sem GUI",
+      "tag": "boot → IA",
+      "pos": [
+        960,
+        330
+      ],
+      "size": [
+        152,
+        64
+      ]
+    },
+    {
+      "id": "apps_dev",
+      "type": "external",
+      "label": "Agentes de dev",
+      "sublabel": "opencode · ai-jail · ai-memory",
+      "tag": "alvo",
+      "pos": [
+        940,
+        105
+      ],
+      "size": [
+        172,
+        66
+      ]
+    },
+    {
+      "id": "apps_edge",
+      "type": "external",
+      "label": "Apps próprios",
+      "sublabel": "Laya Gateway · Web SQLite Admin",
+      "tag": "em construção",
+      "pos": [
+        940,
+        515
+      ],
+      "size": [
+        185,
+        66
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "boot",
+      "from": "hw",
+      "to": "redox",
+      "label": "boot",
+      "variant": "emphasis"
+    },
+    {
+      "id": "extend",
+      "from": "redox",
+      "to": "core",
+      "label": "userspace",
+      "variant": "emphasis"
+    },
+    {
+      "id": "sdk",
+      "from": "core",
+      "to": "clis",
+      "label": "aios-sdk",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "libs",
+      "from": "core",
+      "to": "daemon",
+      "label": "libs Candle"
+    },
+    {
+      "id": "profile-dev",
+      "from": "clis",
+      "to": "devos",
+      "label": "perfil dev"
+    },
+    {
+      "id": "service",
+      "from": "daemon",
+      "to": "edgeos",
+      "label": "edge-ai.service"
+    },
+    {
+      "id": "tools",
+      "from": "devos",
+      "to": "apps_dev",
+      "label": "agentes de dev"
+    },
+    {
+      "id": "consume",
+      "from": "apps_edge",
+      "to": "edgeos",
+      "label": "consome API local",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Base",
+      "items": [
+        "Kernel upstream sem patches (ADR-001)",
+        "Redox consumido como dependência passiva (ADR-014)",
+        "Sem GPU/NPU até existir driver real"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Plataforma única",
+      "items": [
+        "aios-core + ai-inference em Rust (ADR-011)",
+        "GGUF nativo; Candle CPU como backend (ADR-002/003)",
+        "Um meta-repo, dois perfis de imagem (ADR-007)"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Produtos & apps",
+      "items": [
+        "Developer OS: toolchain + agentes de dev",
+        "Edge AI OS: boot direto no serviço de IA",
+        "Apps próprios: ainda em construção"
+      ]
+    }
+  ]
+}

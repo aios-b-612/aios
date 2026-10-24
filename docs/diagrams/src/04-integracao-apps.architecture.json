@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Apps próprios — integração com o runtime",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "openai-path",
+        "label": "Caminho OpenAI",
+        "focus": [
+          "apiclient",
+          "laya",
+          "daemon"
+        ],
+        "note": "Gateway compatível com OpenAI na frente da inferência local."
+      },
+      {
+        "id": "sqlite-path",
+        "label": "Caminho SQLite",
+        "focus": [
+          "browser",
+          "webadmin",
+          "db"
+        ],
+        "note": "Admin de bancos locais em processo separado."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "apiclient",
+      "type": "external",
+      "label": "Clientes OpenAI",
+      "sublabel": "notebook · apps",
+      "tag": "LAN local",
+      "pos": [
+        30,
+        190
+      ],
+      "size": [
+        160,
+        66
+      ]
+    },
+    {
+      "id": "laya",
+      "type": "backend",
+      "label": "Laya Gateway",
+      "sublabel": "roteia inferência",
+      "tag": "fail-open",
+      "pos": [
+        430,
+        190
+      ],
+      "size": [
+        175,
+        66
+      ]
+    },
+    {
+      "id": "daemon",
+      "type": "backend",
+      "label": "Runtime edge-ai",
+      "sublabel": "HTTP 127.0.0.1:8989",
+      "tag": "inferência Candle",
+      "pos": [
+        880,
+        190
+      ],
+      "size": [
+        185,
+        66
+      ]
+    },
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "Navegador",
+      "sublabel": "admin na LAN",
+      "pos": [
+        30,
+        330
+      ],
+      "size": [
+        160,
+        64
+      ]
+    },
+    {
+      "id": "webadmin",
+      "type": "backend",
+      "label": "Web SQLite Admin",
+      "sublabel": "web local · rusqlite",
+      "tag": "separado",
+      "pos": [
+        430,
+        330
+      ],
+      "size": [
+        175,
+        64
+      ]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "Bancos SQLite",
+      "sublabel": "arquivos locais",
+      "tag": ".db no disco",
+      "pos": [
+        880,
+        330
+      ],
+      "size": [
+        185,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Apps próprios (em construção)",
+      "wraps": [
+        "laya",
+        "webadmin"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "id": "openai",
+      "from": "apiclient",
+      "to": "laya",
+      "label": "formato OpenAI",
+      "variant": "emphasis"
+    },
+    {
+      "id": "infer",
+      "from": "laya",
+      "to": "daemon",
+      "label": "/api/infer",
+      "variant": "emphasis"
+    },
+    {
+      "id": "http",
+      "from": "browser",
+      "to": "webadmin",
+      "label": "HTTP local"
+    },
+    {
+      "id": "sqlite",
+      "from": "webadmin",
+      "to": "db",
+      "label": "rusqlite"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Laya Gateway",
+      "items": [
+        "Entra pela frente do POST /api/infer",
+        "Formato compatível com OpenAI para clientes existentes",
+        "Fail-open: não bloqueia o runtime local"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Web SQLite Admin",
+      "items": [
+        "Processo separado do daemon edge-ai",
+        "Fala com bancos locais via rusqlite",
+        "Não passa pelo runtime de IA"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Estado atual",
+      "items": [
+        "Apps próprios: em construção (fora deste repo)",
+        "Runtime e endpoint já validados (Fase 5)",
+        "Offline-first: tudo na rede local (ADR-006)"
+      ]
+    }
+  ]
+}

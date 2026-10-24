@@ -1,0 +1,268 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Ciclo de vida de um modelo GGUF",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 630],
+    "views": [
+      {
+        "id": "install-path",
+        "label": "Instalação",
+        "focus": [
+          "file",
+          "cache",
+          "registered"
+        ],
+        "note": "Do arquivo local ao registry com SHA-256."
+      },
+      {
+        "id": "runtime-use",
+        "label": "Uso em memória",
+        "focus": [
+          "registered",
+          "loaded",
+          "inferring"
+        ],
+        "note": "Carregar, gerar e manter 1 modelo no cache."
+      },
+      {
+        "id": "recovery-exits",
+        "label": "Recuperação e saídas",
+        "focus": [
+          "untrusted",
+          "missing",
+          "removed"
+        ],
+        "note": "Falhas recuperáveis com reinstalação; remoção como saída."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Ciclo principal"
+    },
+    {
+      "id": "exceptions",
+      "label": "Falhas recuperáveis"
+    },
+    {
+      "id": "terminal",
+      "label": "Saída terminal"
+    }
+  ],
+  "states": [
+    {
+      "id": "file",
+      "type": "start",
+      "label": "Arquivo GGUF",
+      "sublabel": "origem local",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "entrada"
+    },
+    {
+      "id": "cache",
+      "type": "active",
+      "label": "Em cache",
+      "sublabel": "/var/lib/ai/models",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "ADR-017"
+    },
+    {
+      "id": "registered",
+      "type": "active",
+      "label": "Registrado",
+      "sublabel": "registry.tsv · sha256",
+      "lane": "main",
+      "col": 2,
+      "step": "03"
+    },
+    {
+      "id": "loaded",
+      "type": "active",
+      "label": "Carregado",
+      "sublabel": "CandleBackend (RAM)",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "1 modelo"
+    },
+    {
+      "id": "inferring",
+      "type": "active",
+      "label": "Gerando",
+      "sublabel": "generate() → tokens/s",
+      "lane": "main",
+      "col": 4,
+      "step": "05"
+    },
+    {
+      "id": "untrusted",
+      "type": "failure",
+      "label": "Divergente",
+      "sublabel": "hash ≠ registry",
+      "lane": "exceptions",
+      "col": 0,
+      "tag": "recuperável"
+    },
+    {
+      "id": "missing",
+      "type": "failure",
+      "label": "Ausente",
+      "sublabel": "entry sem arquivo",
+      "lane": "exceptions",
+      "col": 1,
+      "tag": "recuperável"
+    },
+    {
+      "id": "removed",
+      "type": "neutral",
+      "label": "Removido",
+      "sublabel": "cache + entry limpos",
+      "lane": "terminal",
+      "col": 0,
+      "tag": "terminal"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "install",
+      "from": "file",
+      "to": "cache",
+      "label": "ai install",
+      "variant": "emphasis",
+      "labelDy": 62
+    },
+    {
+      "id": "register",
+      "from": "cache",
+      "to": "registered",
+      "label": "registry.save",
+      "labelAt": [325, 100]
+    },
+    {
+      "id": "load",
+      "from": "registered",
+      "to": "loaded",
+      "label": "load_only",
+      "labelDy": 62
+    },
+    {
+      "id": "generate",
+      "from": "loaded",
+      "to": "inferring",
+      "label": "generate()",
+      "variant": "emphasis",
+      "labelDy": -30
+    },
+    {
+      "id": "respond",
+      "from": "inferring",
+      "to": "loaded",
+      "label": "resposta (tps)",
+      "labelDy": 62
+    },
+    {
+      "id": "verify-fail",
+      "from": "registered",
+      "to": "untrusted",
+      "label": "hash diverge",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [402, 100]
+    },
+    {
+      "id": "verify-recovery",
+      "from": "untrusted",
+      "to": "registered",
+      "label": "reinstalar",
+      "note": "ai install",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "straight",
+      "labelAt": [402, 350]
+    },
+    {
+      "id": "file-missing",
+      "from": "loaded",
+      "to": "missing",
+      "label": "path sumiu",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [556, 100]
+    },
+    {
+      "id": "missing-recovery",
+      "from": "missing",
+      "to": "cache",
+      "label": "reinstalar",
+      "note": "ai install",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [556, 336],
+        [710, 336],
+        [710, 500],
+        [780, 500],
+        [780, 80],
+        [248, 80]
+      ],
+      "labelAt": [479, 522]
+    },
+    {
+      "id": "remove",
+      "from": "registered",
+      "to": "removed",
+      "label": "ai remove",
+      "variant": "dashed",
+      "via": [
+        [402, 200],
+        [330, 200],
+        [330, 480],
+        [94, 480],
+        [94, 450]
+      ],
+      "labelAt": [94, 490]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Instalação",
+      "items": [
+        "install copia para /var/lib/ai/models e calcula SHA-256",
+        "registry.tsv: nome → path, sha256, bytes (ADR-008)",
+        "load_only resolve: arquivo → registry → cache"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Em memória",
+      "items": [
+        "Runtime edge-ai mantém 1 modelo carregado",
+        "Mesmo path → load_ms = 0 (cached)",
+        "Trocar de modelo descarrega o anterior"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Integridade e remoção",
+      "items": [
+        "ai verify recomputa o SHA-256 e compara",
+        "Entry registrada sem arquivo = erro explícito no load",
+        "ai remove apaga cache e entrada do registry"
+      ]
+    }
+  ]
+}

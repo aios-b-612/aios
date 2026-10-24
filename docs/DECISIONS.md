@@ -11,7 +11,6 @@
 - **Contexto**: O Redox upstream é um microkernel ativo. Modificações sem necessidade técnica seriam um fork e quebrariam updates.
 - **Decisão**: Todas as funcionalidades são implementadas em userspace (serviço, daemon, CLI, package, runtime, library, config). Kernel só quando: (1) tecnicamente necessário; (2) justificado; (3) com testes; (4) com docs; (5) sem alternativa em userspace.
 - **Consequências**: + compatibilidade upstream; - acesso a recursos profundos (ex.: aceleradores) não disponíveis no início.
-- **Exceção registrada (2026-09-29) — drivers, não kernel**: o `nvmed` aarch64 é driver de **userspace** (`base.git/drivers/`), portanto esta ADR não se opõe ao patch `platform/patches/aarch64/nvmed-aarch64-poll-fence.patch`, mas o mecanismo de aplicação toca um tree upstream. O patch é repassado por overlay idempotente e versionado, com o pin git intacto e `bootstrap.sh --verify` falhando se o recipe, o patch ou a regra do `cookbook.lock` divergirem. O que se perde é a premissa de que `redox-os/` é byte-idêntico ao upstream; o que se preserva é a atualizações por pin, já que nada é enviado ao Redox (ADR-014). O `--cookbook` do `repo cook` seria o meio limpo, mas é código morto nesta versão (a receita é resolvida por `Walk::new("recipes")` relativo ao CWD, e `config.cookbook_dir` nunca é lido).
 
 ## ADR-002 — GGUF como formato nativo de modelo
 
@@ -35,7 +34,7 @@
 - **Contexto**: Auditoria: x86_64 maduro, aarch64 funcional no QEMU, RPi 3B+ "boot", RPi 4/5 não validados. Wi-Fi e Bluetooth não suportados. **Validado em Fase 1 (2026-09-24)**: QEMU aarch64 boots até kernel+initfs, mas o daemon `nvmed` initfs estoura a stack (guard page) no master ⇒ `/usr` não monta ⇒ sem login. Upstream não faz CI de boot aarch64.
 - **Decisão**: Desenvolvimento em x86_64; validação ARM em QEMU virt (aarch64); hardware Raspberry Pi apenas quando boot real comprovado (começando RPi 3B+). Proibido "fake support".
 - **Consequências**: Produto confiável; RPi 4/5 não prometido até validação. Edge OS aarch64: imagem constrói e canário de boot (bootloader+kernel) passa; userland bloqueada por bug upstream — monitorar (aguardar correção upstream; sem contribuir) antes de Fase 5.
-- **Atualização (2026-09-29) — aarch64 validado, Pi segue não suportado**: o bloqueio em userspace era o `nvmed` pendurando na enumeração de namespaces sob QEMU `virt`, corrigido localmente por poll mode + fences de DMA (`platform/patches/aarch64/nvmed-aarch64-poll-fence.patch`). O `ai-edge` aarch64 agora sobe até `login:`, shell interativo e passa todos os milestones do canário. **Isto é evidência de QEMU, não de hardware**: aBring-up do Pi continua bloqueado, porque o driver SDHCI casa apenas `brcm,bcm2835-sdhci` e o Pi 4 usa BCM2711; o Pi 5 exige trabalho separado em RP1/PCIe. A decisão de não prometer RPi 4/5 sem boot real permanece inalterada.
+- **Atualização (2026-10-16)**: userland aarch64 destravada (fixes `nvmed` + `fdt` vendorizado, ADR-023); **boot completo em QEMU `raspi4b` até login/shell com o driver real de SD**, já na imagem do produto (base + aios + aios-models). RPi 4B real: aguardando material (cartão SD sacrificial + adaptador UART USB-TTL); RPi 5 segue não validado.
 
 ## ADR-005 — Isolamento via `contain` + schemes, sem sandbox fake
 
@@ -173,6 +172,15 @@
 - **Decisão**: site estático sem build e sem dependências (HTML/CSS/JS, PT-BR, responsivo) em repositório **dedicado** — `aios-b-612/aios-b-612.github.io` — publicado no GitHub Pages direto de `main`. O site **não** vive neste repositório: o código do SO não carrega artefatos de site, e o repositório de pages é público por definição. O painel do `edge-ai` continua sendo a interface local de runtime/métricas, não a vitrine pública.
 - **Consequências**: + zero infraestrutura própria, publicação versionada no git, HTTPS automático e domínio próprio possível depois; + o repositório do SO fica limpo de artefatos web; - o site é informacional (sem dados de runtime ao vivo; se isso virar requisito, precisa de API pública separada com rate-limit); - o conteúdo do site (ex.: créditos, links de terceiros) passa a ser atualizado em outro repositório, exigindo disciplina de versão. Documento: item "Apps" do site descreve apps em construção; itens de roadmap marcados aqui podem divergir do site até a próxima atualização.
 - **Status**: Aceito (2026-09-25).
+
+---
+
+## ADR-023 — Crate `fdt` vendorizada com `[patch]` (fix dos tokens NOP do libfdt)
+
+- **Status**: Aceito (2026-10-16)
+- **Contexto**: O kernel aarch64 morria em silêncio antes do console (QEMU `raspi4b` e Pi): o crate `fdt` (leitor de Device Tree — `repnop/fdt` git `0.2.0-alpha1` e `0.1.5` do crates.io) **não pula tokens NOP**, e o libfdt/u-boot insere NOPs nos fixups do DT do Raspberry Pi. O parse do DT falha/misinterpreta nós e o boot para antes de qualquer saída serial. Causa raiz confirmada comparando o DT efetivo com/sem NOPs.
+- **Decisão**: corrigir a crate localmente (5 pontos em `node.rs`: `children`/`parse_property`, `find_node`, `all_nodes` ×2, `skip_current_node`) e **vendorizar** as duas cópias em `patches/fdt/` (`git-0.2.0-alpha1/`, `crates-io-0.1.5/`), com diffs para upstream (`fdt-nop-tokens*.patch`) e seções `[patch]` nos `Cargo.toml` de kernel, base e bootloader (locks regenerados). Nada é enviado upstream (ADR-001); o vendor é a fonte de verdade do produto.
+- **Consequências**: + boot aarch64 reprodutível e offline (o build não depende de rede/git); + patch pequeno e auditável, reaplicável ao subir de rev; − a cada bump do `fdt` upstream é preciso re-gerar vendor/diff (checklist em `patches/fdt/README.md`).
 
 ---
 
