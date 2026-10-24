@@ -26,6 +26,9 @@ use aios_security::enforce::AccessRequest;
 use aios_security::permissions::{AccessLevel, ResourceType};
 use aios_security::policy::{PolicyEffect, PolicyRule};
 use aios_security::{AIPermissions, Enforcer, PolicyRegistry, SecurityPolicy};
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::exit;
 
 const USAGE: &str = "\
@@ -41,6 +44,7 @@ usage:
   aios-security describe <policy>
   aios-security contain-profiles
   aios-security contain-plan <profile> [name]
+  aios-security audit [--denied] [--limit N]
   aios-security help";
 
 fn main() {
@@ -61,6 +65,7 @@ fn main() {
         Some("describe") => cmd_describe(&args[1..]),
         Some("contain-profiles") => cmd_contain_profiles(),
         Some("contain-plan") => cmd_contain_plan(&args[1..]),
+        Some("audit") => cmd_audit(&args[1..]),
         Some("help" | "-h" | "--help") => {
             println!("{USAGE}");
             0
@@ -533,6 +538,33 @@ fn cmd_authorize(args: &[String]) -> i32 {
     let mut enforcer = Enforcer::new(policy);
     let decision = enforcer.authorize(&request);
 
+    // Persist the decision so `aios-security audit` can inspect it later.
+    // The enforcer itself only keeps an in-memory ring buffer, which is lost
+    // when the CLI exits.
+    let entry = serde_json::json!({
+        "ts": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        "policy": policy_name,
+        "resource": format!("{:?}", request.resource).to_lowercase(),
+        "access": format!("{:?}", request.access).to_lowercase(),
+        "scope": request.scope,
+        "allowed": decision.allowed,
+        "matched_rule": decision.matched_rule,
+        "reason": decision.reason,
+    });
+    if let Some(parent) = default_audit_file().parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(default_audit_file())
+    {
+        let _ = writeln!(f, "{}", entry);
+    }
+
     println!("Policy: {policy_name}");
     println!("Request: {resource:?} {access:?} scope={:?}", request.scope);
     if !request.context.is_empty() {
@@ -631,4 +663,96 @@ fn cmd_contain_plan(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+fn default_audit_file() -> PathBuf {
+    std::env::var("AIOS_AUDIT_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("aios")
+                .join("audit.jsonl")
+        })
+}
+
+fn cmd_audit(args: &[String]) -> i32 {
+    let mut denied_only = false;
+    let mut limit: Option<usize> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--denied" => denied_only = true,
+            "--limit" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--limit requires a value");
+                    return 2;
+                }
+                match args[i].parse::<usize>() {
+                    Ok(n) => limit = Some(n),
+                    Err(_) => {
+                        eprintln!("--limit expects a number");
+                        return 2;
+                    }
+                }
+            }
+            other => {
+                eprintln!("unexpected argument: {other}");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+
+    let path = default_audit_file();
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("No audit log yet ({}).", path.display());
+            println!("Run 'aios-security authorize ...' to record decisions.");
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("error reading audit log: {e}");
+            return 1;
+        }
+    };
+
+    let mut entries: Vec<serde_json::Value> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+
+    if denied_only {
+        entries.retain(|e| !e.get("allowed").and_then(|v| v.as_bool()).unwrap_or(true));
+    }
+
+    if let Some(n) = limit {
+        if entries.len() > n {
+            entries = entries[entries.len() - n..].to_vec();
+        }
+    }
+
+    if entries.is_empty() {
+        println!(
+            "No audit entries{}.",
+            if denied_only { " (denied)" } else { "" }
+        );
+        return 0;
+    }
+
+    println!("Audit log ({} entries):", entries.len());
+    for e in &entries {
+        let ts = e.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
+        let policy = e.get("policy").and_then(|v| v.as_str()).unwrap_or("?");
+        let resource = e.get("resource").and_then(|v| v.as_str()).unwrap_or("?");
+        let access = e.get("access").and_then(|v| v.as_str()).unwrap_or("?");
+        let allowed = e.get("allowed").and_then(|v| v.as_bool()).unwrap_or(false);
+        let reason = e.get("reason").and_then(|v| v.as_str()).unwrap_or("");
+        let mark = if allowed { "✓" } else { "✗" };
+        println!("  {mark} ts={ts} policy={policy} {resource}/{access}  {reason}");
+    }
+    0
 }
