@@ -1,10 +1,11 @@
 //! `aios-deploy`: Edge Deployment CLI (Fase 7).
 //!
-//!   aios-deploy devices              list registered devices
+//!   aios-deploy devices | list       list registered devices
 //!   aios-deploy add <name> <addr>    register a new edge device
 //!   aios-deploy remove <id>          remove a device
 //!   aios-deploy deploy <id> <model>  deploy a model to a device
-//!   aios-deploy status <id>          show deployment status
+//!   aios-deploy status <id>          show deployment status (live probe)
+//!   aios-deploy rollback <id> <model> restore the previous model version
 //!   aios-deploy validate <id> <model> validate compatibility
 //!   aios-deploy help
 
@@ -14,10 +15,12 @@ use std::process::exit;
 
 const USAGE: &str = "\
 usage:
-  aios-deploy devices
+  aios-deploy devices | list
   aios-deploy add <name> <address> [--arch ARCH] [--os OS] [--ram MB] [--storage MB]
   aios-deploy remove <id>
   aios-deploy deploy <device-id> <model-path> [--name NAME] [--force] [--no-verify]
+  aios-deploy status <device-id>
+  aios-deploy rollback <device-id> <model-name>
   aios-deploy validate <device-id> <model-path>
   aios-deploy help";
 
@@ -28,10 +31,12 @@ fn main() {
             eprintln!("{USAGE}");
             2
         }
-        Some("devices") => cmd_devices(&args[1..]),
+        Some("devices" | "list") => cmd_devices(&args[1..]),
         Some("add") => cmd_add(&args[1..]),
         Some("remove") => cmd_remove(&args[1..]),
         Some("deploy") => cmd_deploy(&args[1..]),
+        Some("status") => cmd_status(&args[1..]),
+        Some("rollback") => cmd_rollback(&args[1..]),
         Some("validate") => cmd_validate(&args[1..]),
         Some("help" | "-h" | "--help") => {
             println!("{USAGE}");
@@ -465,6 +470,172 @@ fn cmd_deploy(args: &[String]) -> i32 {
                  back healthy. It may need a service restart, or the model may be \
                  too large to load on this device."
             );
+
+            // The daemon keeps the replaced model under `.backup/`. Restoring
+            // it is what makes a failed deploy safe: the device goes back to
+            // serving the version it had before instead of staying stuck on a
+            // model it cannot load.
+            eprintln!("\nRolling back to the previous version...");
+            match aios_deploy::rollback_model(&config.base_url, &result.model_name) {
+                Ok(r) => {
+                    eprintln!("  rolled back to '{}'", r.model);
+                    eprintln!("  sha256:        {}", r.sha256);
+                    eprintln!("  size:          {} bytes", r.size_bytes);
+                    match aios_deploy::probe_device(&config.base_url) {
+                        Ok(p) => eprintln!(
+                            "  device now:    {} ({} model(s) installed)",
+                            p.status,
+                            p.models.len()
+                        ),
+                        Err(pe) => eprintln!("  warning: could not re-probe the device: {pe}"),
+                    }
+                }
+                Err(re) => {
+                    eprintln!("  rollback failed: {re}");
+                    eprintln!(
+                        "  the device may be left with a model it cannot serve; \
+                         inspect it with 'aios-deploy status'."
+                    );
+                    // `devices` was updated to Online before the health check.
+                    // Record the failure so it does not keep claiming the
+                    // device is fine.
+                    if let Ok(mut reg) = DeviceRegistry::load() {
+                        reg.update_status(
+                            &resolved_id,
+                            DeviceStatus::Error("deploy health check failed".into()),
+                        );
+                        let _ = reg.save();
+                    }
+                }
+            }
+            1
+        }
+    }
+}
+
+fn cmd_status(args: &[String]) -> i32 {
+    if args.len() != 1 {
+        eprintln!("usage: aios-deploy status <device-id>");
+        return 2;
+    }
+
+    let reg = match DeviceRegistry::load() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error loading registry: {e}");
+            return 1;
+        }
+    };
+    let device = match resolve_device(&reg, &args[0]) {
+        Some(d) => d,
+        None => {
+            eprintln!("Device {} not found", args[0]);
+            eprintln!("Run 'aios-deploy devices' to list registered devices.");
+            return 1;
+        }
+    };
+
+    // Snapshot the fields before dropping the registry borrow, because the
+    // probe below updates and saves the same registry.
+    let id = device.id.clone();
+    let name = device.name.clone();
+    let address = device.address.clone();
+    let arch = device.arch.clone();
+    let os = device.os.clone();
+    let ram_mb = device.ram_mb;
+    let storage_mb = device.storage_mb;
+    let registry_status = device.status_str().to_string();
+    let models = device.models.clone();
+    let last_seen = device.last_seen;
+
+    println!("Device {name}");
+    println!("  id:        {id}");
+    println!("  address:   {address}");
+    println!("  arch/os:   {arch} / {os}");
+    println!("  ram:       {ram_mb} MB");
+    println!("  storage:   {storage_mb} MB");
+    println!("  registry:  {registry_status}");
+    println!(
+        "  last seen: {}",
+        if last_seen == 0 {
+            "never".to_string()
+        } else {
+            format!("{last_seen} (unix)")
+        }
+    );
+    if models.is_empty() {
+        println!("  models:    <none>");
+    } else {
+        println!("  models:    {}", models.join(", "));
+    }
+
+    println!("\nLive probe:");
+    let base = format!("http://{address}");
+    match aios_deploy::probe_device(&base) {
+        Ok(p) => {
+            println!("  service:   {} v{}", p.service, p.version);
+            println!("  status:    {}", p.status);
+            if p.models.is_empty() {
+                println!("  models:    <none>");
+            } else {
+                println!("  models:    {}", p.models.join(", "));
+            }
+            if let Ok(mut reg) = DeviceRegistry::load() {
+                reg.update_status(&id, DeviceStatus::Online);
+                reg.update_models(&id, p.models);
+                reg.touch(&id);
+                if let Err(e) = reg.save() {
+                    eprintln!("  warning: could not update the device registry: {e}");
+                }
+            }
+            0
+        }
+        Err(e) => {
+            println!("  unreachable: {e}");
+            if let Ok(mut reg) = DeviceRegistry::load() {
+                reg.update_status(&id, DeviceStatus::Offline);
+                if let Err(e) = reg.save() {
+                    eprintln!("  warning: could not update the device registry: {e}");
+                }
+            }
+            1
+        }
+    }
+}
+
+fn cmd_rollback(args: &[String]) -> i32 {
+    if args.len() != 2 {
+        eprintln!("usage: aios-deploy rollback <device-id> <model-name>");
+        return 2;
+    }
+
+    let reg = match DeviceRegistry::load() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error loading registry: {e}");
+            return 1;
+        }
+    };
+    let device = match resolve_device(&reg, &args[0]) {
+        Some(d) => d,
+        None => {
+            eprintln!("Device {} not found", args[0]);
+            eprintln!("Run 'aios-deploy devices' to list registered devices.");
+            return 1;
+        }
+    };
+    let base = format!("http://{}", device.address);
+
+    match aios_deploy::rollback_model(&base, &args[1]) {
+        Ok(r) => {
+            println!(
+                "Rolled back '{}' on {} ({} bytes, sha256 {})",
+                r.model, device.name, r.size_bytes, r.sha256
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("rollback failed: {e}");
             1
         }
     }

@@ -5,6 +5,7 @@
 use aios_core::{checksum, ModelMeta};
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -389,4 +390,113 @@ pub fn pull_model(config: &TransferConfig, model_name: &str, output_path: &Path)
         output_path.display()
     );
     Ok(())
+}
+
+/// Result of asking the device to restore the model replaced by the last deploy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RollbackResult {
+    pub model: String,
+    pub path: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+}
+
+/// Ask the device to restore the backup of `model_name` (the version that was
+/// installed before the last deploy). The edge daemon keeps one backup per
+/// model name; a 404 means the model was never replaced, so there is nothing
+/// to roll back.
+pub fn rollback_model(base_url: &str, model_name: &str) -> Result<RollbackResult> {
+    let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
+    let url = format!("{}/api/models/rollback", base_url.trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "name": model_name }))
+        .send()
+        .with_context(|| format!("POST {url}"))?;
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("rollback failed: HTTP {status}: {text}"));
+    }
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("rollback response is not JSON: {text}"))?;
+    Ok(RollbackResult {
+        model: v
+            .get("model")
+            .and_then(|x| x.as_str())
+            .unwrap_or(model_name)
+            .to_string(),
+        path: v
+            .get("path")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        sha256: v
+            .get("sha256")
+            .and_then(|x| x.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        size_bytes: v.get("size").and_then(|x| x.as_u64()).unwrap_or(0),
+    })
+}
+
+/// What a live device reports about itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceProbe {
+    pub status: String,
+    pub service: String,
+    pub version: String,
+    pub models: Vec<String>,
+}
+
+/// Probe a registered device without deploying: `GET /api/health` plus
+/// `GET /api/models`. Used by `aios-deploy status` and `edge devices`.
+pub fn probe_device(base_url: &str) -> Result<DeviceProbe> {
+    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+    let base = base_url.trim_end_matches('/');
+
+    let health: serde_json::Value = client
+        .get(format!("{base}/api/health"))
+        .send()
+        .with_context(|| format!("GET {base}/api/health"))?
+        .error_for_status()
+        .context("device health check failed")?
+        .json()
+        .context("health response is not JSON")?;
+
+    let models: serde_json::Value = client
+        .get(format!("{base}/api/models"))
+        .send()
+        .with_context(|| format!("GET {base}/api/models"))?
+        .error_for_status()
+        .context("device model list failed")?
+        .json()
+        .context("models response is not JSON")?;
+
+    Ok(DeviceProbe {
+        status: health
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        service: health
+            .get("service")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        version: health
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        models: models
+            .get("models")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
 }

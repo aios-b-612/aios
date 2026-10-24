@@ -48,6 +48,8 @@ struct Received {
     requests_per_chunk: HashMap<usize, usize>,
     /// Models that passed finalize.
     installed: Vec<(String, String)>,
+    /// Model names the client asked to roll back.
+    rollbacks: Vec<String>,
     /// Total chunk POSTs, to assert retry actually re-sent.
     total_posts: usize,
 }
@@ -280,6 +282,34 @@ fn handle_conn(
                 .collect();
             let body = serde_json::json!({ "count": models.len(), "models": models });
             drop(s);
+            respond(stream, 200, &body.to_string());
+        }
+
+        "/api/models/rollback" => {
+            let name = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(str::to_string))
+                .unwrap_or_default();
+            if name.is_empty() {
+                respond(stream, 400, r#"{"error":"missing name"}"#);
+                return Ok(());
+            }
+            let mut s = state.lock().expect("lock");
+            s.rollbacks.push(name.clone());
+            let sha = s
+                .installed
+                .iter()
+                .find(|(n, _)| n == &name)
+                .map(|(_, sha)| sha.clone())
+                .unwrap_or_default();
+            drop(s);
+            let body = serde_json::json!({
+                "status": "rolled_back",
+                "model": name,
+                "path": format!("/models/{name}.gguf"),
+                "sha256": sha,
+                "size": 0
+            });
             respond(stream, 200, &body.to_string());
         }
 
@@ -693,6 +723,48 @@ fn health_check_fails_when_the_device_does_not_list_the_model() {
     assert!(
         message.contains("never-deployed"),
         "error should name the missing model, got: {message}"
+    );
+}
+
+#[test]
+fn probe_device_reports_health_and_installed_models() {
+    let device = FakeDevice::start(0, vec![]);
+    {
+        let mut s = device.state.lock().expect("lock");
+        s.installed.push(("tiny".to_string(), "abc123".to_string()));
+    }
+
+    let probe = aios_deploy::probe_device(&device.base_url()).expect("probe");
+    assert_eq!(probe.service, "edge-ai");
+    assert_eq!(probe.status, "ok");
+    assert_eq!(probe.version, "0.1.0");
+    assert_eq!(probe.models, vec!["tiny".to_string()]);
+}
+
+#[test]
+fn rollback_model_posts_the_name_and_parses_the_response() {
+    let device = FakeDevice::start(0, vec![]);
+    {
+        let mut s = device.state.lock().expect("lock");
+        s.installed.push(("tiny".to_string(), "abc123".to_string()));
+    }
+
+    let r = aios_deploy::rollback_model(&device.base_url(), "tiny").expect("rollback");
+    assert_eq!(r.model, "tiny");
+    assert_eq!(r.sha256, "abc123");
+    assert_eq!(r.path, "/models/tiny.gguf");
+
+    let s = device.state.lock().expect("lock");
+    assert_eq!(s.rollbacks, vec!["tiny".to_string()]);
+}
+
+#[test]
+fn rollback_model_fails_against_an_unreachable_device() {
+    let err = aios_deploy::rollback_model("http://127.0.0.1:1", "tiny")
+        .expect_err("an unreachable device must fail the rollback");
+    assert!(
+        format!("{err}").contains("POST") || format!("{err}").contains("rollback failed"),
+        "error should name the failed request, got: {err}"
     );
 }
 
