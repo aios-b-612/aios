@@ -139,6 +139,27 @@ fn cmd_status(args: &[String]) -> i32 {
                 }
                 Err(e) => eprintln!("  metrics: {e}"),
             }
+            // `models installed: N` alone does not say *which* model is
+            // deployed, and that is the question an operator runs `status`
+            // to answer after a deploy.
+            match get_json(&c, "/api/models") {
+                Ok(m) => {
+                    let names: Vec<&str> = m["models"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x["name"].as_str())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if names.is_empty() {
+                        println!("models: (none)");
+                    } else {
+                        println!("models: {}", names.join(", "));
+                    }
+                }
+                Err(e) => eprintln!("  models: {e}"),
+            }
             0
         }
         Err(e) => {
@@ -934,6 +955,18 @@ fn cmd_deploy(args: &[String]) -> i32 {
         }
         Err(e) => {
             eprintln!("  health check failed: {e}");
+            // A transfer that installed but cannot serve the model is not a
+            // successful deploy. Restore the version the device had before.
+            eprintln!("rolling back to the previous version...");
+            match aios_deploy::rollback_model(&config.base_url, &result.model_name) {
+                Ok(r) => {
+                    eprintln!("  rolled back to '{}' (sha256 {})", r.model, r.sha256);
+                }
+                Err(re) => {
+                    eprintln!("  rollback failed: {re}");
+                    eprintln!("  the device may be left with a model it cannot serve");
+                }
+            }
             return 1;
         }
     }
