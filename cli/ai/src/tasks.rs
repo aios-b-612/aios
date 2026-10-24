@@ -244,7 +244,7 @@ mod tests {
         let s = router.get("summarize").expect("builtin summarize");
         let prompt = s.render("hello world");
         assert!(prompt.contains("hello world"));
-        assert!(prompt.contains("{input}") == false);
+        assert!(!prompt.contains("{input}"));
     }
 
     #[test]

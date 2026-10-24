@@ -29,6 +29,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// Hook run after the device accepts chunk 0, used to race the model file
+/// against its own transfer.
+type Chunk0Hook = Arc<dyn Fn() + Send + Sync>;
+/// Shared, late-installable slot for [`Chunk0Hook`].
+type SharedChunk0Hook = Arc<Mutex<Option<Chunk0Hook>>>;
+
 /// What the fake edge device recorded.
 #[derive(Default)]
 struct Received {
@@ -56,7 +62,7 @@ struct FakeDevice {
     /// the file but before it has finished. Lets a test race the model file
     /// against its own transfer. Behind a lock so a test can install the hook
     /// after the device is already listening.
-    on_chunk0: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    on_chunk0: SharedChunk0Hook,
     /// Kept so the listener thread's JoinHandle is not dropped, which would
     /// detach it silently. The thread exits when `stop` is set on Drop.
     listener: Option<thread::JoinHandle<()>>,
@@ -74,7 +80,7 @@ impl FakeDevice {
         let fail_once = Arc::new(Mutex::new(HashSet::new()));
         let corrupt = Arc::new(Mutex::new(corrupt));
         let stop = Arc::new(AtomicBool::new(false));
-        let on_chunk0: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> = Arc::new(Mutex::new(None));
+        let on_chunk0: SharedChunk0Hook = Arc::new(Mutex::new(None));
 
         let thread_state = Arc::clone(&state);
         let thread_fail = Arc::clone(&fail_first);
@@ -239,7 +245,7 @@ fn handle_conn(
     fail_first: &Arc<AtomicUsize>,
     fail_once: &Arc<Mutex<HashSet<usize>>>,
     corrupt: &Arc<Mutex<Vec<usize>>>,
-    on_chunk0: &Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    on_chunk0: &SharedChunk0Hook,
 ) -> std::io::Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
 
@@ -869,8 +875,7 @@ fn a_corrupt_metadata_count_is_an_error_not_a_panic() {
     std::fs::write(&path, &data).unwrap();
 
     let err = aios_core::ModelMeta::from_path(&path)
-        .err()
-        .expect("a corrupt metadata count must be an error, not a panic");
+        .expect_err("a corrupt metadata count must be an error, not a panic");
     assert!(
         format!("{err:?}").contains("metadata entries"),
         "error should name the offending field, got: {err:?}"
@@ -898,8 +903,7 @@ fn a_corrupt_array_count_is_an_error_not_a_panic() {
     std::fs::write(&path, &data).unwrap();
 
     let err = aios_core::ModelMeta::from_path(&path)
-        .err()
-        .expect("a corrupt array count must be an error, not a panic");
+        .expect_err("a corrupt array count must be an error, not a panic");
     assert!(
         format!("{err:?}").contains("array"),
         "error should name the array, got: {err:?}"
@@ -926,8 +930,7 @@ fn a_corrupt_string_length_is_an_error_not_an_oom() {
     std::fs::write(&path, &data).unwrap();
 
     let err = aios_core::ModelMeta::from_path(&path)
-        .err()
-        .expect("an oversized string length must be an error");
+        .expect_err("an oversized string length must be an error");
     assert!(
         format!("{err:?}").contains("limit"),
         "error should cite the size limit, got: {err:?}"
@@ -957,8 +960,7 @@ fn a_string_length_that_overflows_the_address_space_is_an_error() {
     std::fs::write(&path, &data).unwrap();
 
     let err = aios_core::ModelMeta::from_path(&path)
-        .err()
-        .expect("a length that overflows the address space must be an error");
+        .expect_err("a length that overflows the address space must be an error");
     let message = format!("{err:?}");
     assert!(
         message.contains("limit") || message.contains("address space"),
