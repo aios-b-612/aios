@@ -211,6 +211,12 @@ sync_recipe_overlays
 # pinned rev is actually built.
 write_lock_entry bootloader
 
+# Same reason for the kernel: the AIOS recipe pins a local kernel rev (the
+# deprecated-syscall warnings are rate-limited so the console stays usable).
+# Pinning the recipe to the source rule makes cook build that rev instead of
+# downloading the upstream prebuilt package.
+write_lock_entry kernel
+
 # --- patches overlay ---------------------------------------------------------
 #
 # Not every arch carries patches. An absent directory means "nothing declared
