@@ -19,3 +19,4 @@ platform/dist/
 
 # Local artifacts
 aios-models.tar
+.env

@@ -1,0 +1,2 @@
+empty_or_no_magic nonzero=47
+source=/dev/sda LBA=4259840

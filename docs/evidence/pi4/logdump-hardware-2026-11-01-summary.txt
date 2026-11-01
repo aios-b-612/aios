@@ -1,0 +1,37 @@
+48: init: switchroot to /scheme/initfs /scheme/initfs/etc
+390: AIOS: starting early log dumper at LBA 4259840
+395: logdump: seq=1 35328 bytes at t=0ms
+455: [3m[38;5;15m1970-01-01T00-00-17.243[m[39m[3m[38;5;7mZ[m[39m [[38;5;7m@pcid::cfg_access[39m:240 [1m[38;5;11mWARN[m[39m] [1m[38;5;15mCouldn't retrieve PCIe info, perhaps the kernel is not compiled with acpi or device tree support? Using the PCI 3.0 configuration space instead. ACPI error: Os { code: 19, kind: Uncategorized, message: "No such device" } FDT error: Custom { kind: NotFound, error: "couldn't find pci-host-ecam-generic node in device tree" }[m[39m
+456: [3m[38;5;15m1970-01-01T00-00-17.286[m[39m[3m[38;5;7mZ[m[39m [[38;5;7m@pcid[39m:250 [1m[38;5;12mINFO[m[39m] [1m[38;5;15mPCI SG-BS:DV.F VEND:DEVI CL.SC.IN.RV[m[39m
+461: thread 'main' (1) panicked at drivers/pcid/src/cfg_access/fallback.rs:88:9:
+463: [ERROR pcid@src/header/stdlib/mod.rs:121] Abort
+536: kernel::context::signal:INFO -- UNHANDLED EXCEPTION, CPU #0, PID 15, NAME /scheme/initfs/bin/pcid, CONTEXT 0xfffffe800012c400
+537: daemon: INIT_NOTIFY="7" "pcid" exited without notifying readiness
+570: init: env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/scheme/initfs/lib" PATH="/scheme/initfs/bin" RUST_BACKTRACE="1" "pcid-spawner" "--initfs" failed with exit status: 1
+587: [ERROR redoxfs] failed to open filesystem /scheme/disk.mmc/0: No such file or directory
+591: [ERROR redoxfs] failed to open filesystem /scheme/disk.mmc/0p0: No such file or directory
+595: [ERROR redoxfs] failed to open filesystem /scheme/disk.mmc/0p1: No such file or directory
+601: logdump: seq=2 49664 bytes at t=2251ms
+608: init: switchroot to /usr /etc
+809: init: env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "pcid-spawner" failed with exit status: 1
+816: logdump: seq=3 65024 bytes at t=4508ms
+899: kernel::context::signal:INFO -- UNHANDLED EXCEPTION, CPU #0, PID 18, NAME /scheme/initfs/bin/redoxfs, CONTEXT 0xfffffe800012ada0
+905: init: failed to execute cd "/" && env -i LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "mkdir" "-m" "a=rwxt" "/tmp": No such device (os error 19)
+912: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "logind": No such file or directory (os error 2)
+919: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "sudo" "--daemon": No such file or directory (os error 2)
+926: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "localectl" "apply": No such file or directory (os error 2)
+933: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "fbcond" "2": No such file or directory (os error 2)
+940: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "getty" "/scheme/debug/no-preserve" "-J": No such file or directory (os error 2)
+947: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "bcm2711-genetd": No such file or directory (os error 2)
+954: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "netstack": No such file or directory (os error 2)
+961: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "resolved": No such file or directory (os error 2)
+968: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "audiod": No such file or directory (os error 2)
+977: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "getty" "2": No such file or directory (os error 2)
+984: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "networkd": No such file or directory (os error 2)
+989: init: failed to execute cd "/" && env -i LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "inputd" "-A" "2": No such device (os error 19)
+996: init: failed to execute env -i INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "dhcpd": No such file or directory (os error 2)
+1003: init: failed to execute env -i AIOS_MODELS_DIR="/usr/share/aios/models" AIOS_REGISTRY="/var/lib/ai/registry.tsv" INIT_NOTIFY="4" LD_LIBRARY_PATH="/usr/lib" PATH="/usr/bin" RUST_BACKTRACE="1" "edge-ai" "--host" "0.0.0.0" "--port" "8989" "--model" "tinyllama": No such file or directory (os error 2)
+1024: logdump: seq=15 84992 bytes at t=33855ms
+1055: logdump: seq=30 87552 bytes at t=69762ms
+1086: logdump: seq=45 90112 bytes at t=105827ms
+1117: logdump: seq=60 92672 bytes at t=394293ms

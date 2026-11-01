@@ -201,6 +201,22 @@ sync_recipe_overlays() {
 
 sync_recipe_overlays
 
+# --- bootloader pin ----------------------------------------------------------
+#
+# The AIOS recipe pins the bootloader to a local rev (headless auto-boot: the
+# boot menu times out instead of waiting forever for a keypress). With the
+# default REPO_BINARY=1 the cookbook downloads the upstream prebuilt package and
+# silently ignores that rev, so the image ships a pristine EFI that hangs on the
+# menu when no keyboard is attached. Pin the recipe to the source rule so the
+# pinned rev is actually built.
+write_lock_entry bootloader
+
+# Same reason for the kernel: the AIOS recipe pins a local kernel rev (the
+# deprecated-syscall warnings are rate-limited so the console stays usable).
+# Pinning the recipe to the source rule makes cook build that rev instead of
+# downloading the upstream prebuilt package.
+write_lock_entry kernel
+
 # --- patches overlay ---------------------------------------------------------
 #
 # Not every arch carries patches. An absent directory means "nothing declared
