@@ -1,0 +1,6 @@
+AIOS-SDHCI-LOGDUMP v1
+seq=62 elapsed_ms=455149 len=92529 truncated=false head=92529 tail=0
+
+source=/dev/sda
+LBA=4259840
+bytes=92529

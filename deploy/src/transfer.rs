@@ -449,10 +449,86 @@ pub struct DeviceProbe {
     pub models: Vec<String>,
 }
 
+/// Normalize an address or URL into an `http://host:port` base for probes.
+///
+/// Accepts `10.42.0.5`, `10.42.0.5:8989`, or a full `http://…` URL.
+pub fn normalize_base_url(address: &str) -> String {
+    let a = address.trim().trim_end_matches('/');
+    if a.starts_with("http://") || a.starts_with("https://") {
+        return a.to_string();
+    }
+    if a.contains(':') {
+        format!("http://{a}")
+    } else {
+        format!("http://{a}:8989")
+    }
+}
+
+/// Scan a CIDR-like `/24` prefix for AIOS Edge nodes listening on `port`.
+///
+/// `prefix` is the first three octets, e.g. `"10.42.0"`. Hosts `.1`–`.254`
+/// are probed in parallel (bounded); only hosts that answer `/api/health`
+/// with `service=edge-ai` are returned. Uses a short connect timeout so an
+/// empty LAN finishes in a few seconds.
+pub fn scan_subnet(prefix: &str, port: u16) -> Vec<(String, DeviceProbe)> {
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    let work: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new((1u8..=254).collect()));
+    let found: Arc<Mutex<Vec<(String, DeviceProbe)>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut handles = Vec::new();
+
+    for _ in 0..32 {
+        let work = Arc::clone(&work);
+        let found = Arc::clone(&found);
+        let prefix = prefix.to_string();
+        handles.push(thread::spawn(move || {
+            let client = match Client::builder()
+                .timeout(Duration::from_millis(400))
+                .connect_timeout(Duration::from_millis(200))
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            loop {
+                let host = {
+                    let mut q = match work.lock() {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
+                    q.pop()
+                };
+                let Some(host) = host else { return };
+                let addr = format!("{prefix}.{host}:{port}");
+                let base = format!("http://{addr}");
+                if let Ok(probe) = probe_device_with_client(&client, &base) {
+                    if probe.service == "edge-ai" || probe.status == "ok" {
+                        if let Ok(mut g) = found.lock() {
+                            g.push((addr, probe));
+                        }
+                    }
+                }
+            }
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
+    }
+
+    let mut out = found.lock().map(|g| g.clone()).unwrap_or_default();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 /// Probe a registered device without deploying: `GET /api/health` plus
 /// `GET /api/models`. Used by `aios-deploy status` and `edge devices`.
 pub fn probe_device(base_url: &str) -> Result<DeviceProbe> {
     let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+    probe_device_with_client(&client, base_url)
+}
+
+fn probe_device_with_client(client: &Client, base_url: &str) -> Result<DeviceProbe> {
     let base = base_url.trim_end_matches('/');
 
     let health: serde_json::Value = client
@@ -499,4 +575,26 @@ pub fn probe_device(base_url: &str) -> Result<DeviceProbe> {
             })
             .unwrap_or_default(),
     })
+}
+
+#[cfg(test)]
+mod fleet_url_tests {
+    use super::normalize_base_url;
+
+    #[test]
+    fn normalize_adds_default_port() {
+        assert_eq!(normalize_base_url("10.42.0.5"), "http://10.42.0.5:8989");
+    }
+
+    #[test]
+    fn normalize_keeps_explicit_port_and_url() {
+        assert_eq!(
+            normalize_base_url("10.42.0.5:9000"),
+            "http://10.42.0.5:9000"
+        );
+        assert_eq!(
+            normalize_base_url("http://10.42.0.5:8989/"),
+            "http://10.42.0.5:8989"
+        );
+    }
 }

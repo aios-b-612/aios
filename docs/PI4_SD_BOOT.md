@@ -79,8 +79,9 @@ picocom -b 115200 --logfile /tmp/pi4-boot.log /dev/ttyUSB0
    - u-boot acha `EFI/BOOT/BOOTAA64.EFI` no cartão e carrega o bootloader Redox;
    - kernel Redox: mensagens de init, driver de SD (`bcm2835-sdhcid`) anunciando
      o cartão, `init: switchroot to /usr /etc`;
-   - **`redox login:`** → login `root` / senha `password`.
-3. Se chegou no login: **sucesso** — o SO está rodando do cartão no hardware real.
+   - **`aios login:`** (branding AIOS Edge) → contas de laboratório `user` /
+     `root` (altere a senha de `root` assim que houver teclado ou rede).
+3. Se chegou no login: **sucesso v0.1** — o SO está rodando do cartão no hardware real.
 
 Para parar/desligar com segurança: desligue a energia (o RedoxFS tolera; evite
 ciclos rápidos). Log completo em `/tmp/pi4-boot.log` — me mande esse arquivo!
@@ -113,7 +114,8 @@ ciclos rápidos). Log completo em `/tmp/pi4-boot.log` — me mande esse arquivo!
   SDHCI) — no QEMU ele foi validado contra o controlador emulado via DT
   remapeado; no Pi real o cartão está no **EMMC2** (BCM2711), que é o alvo do
   driver. É o primeiro item a observar no log.
-- Rede (GENET) ainda **não tem driver** → `edge-ai` não sobe no Pi por enquanto
-  (gap conhecido; o runtime AIOS já está na imagem).
+- Rede: ver `docs/RPI4_NET_PLAN.md` e `docs/CLUSTER.md`. Cartão 2026-11-01 traz
+  GENET M1+M2 + `edge-ai --host 0.0.0.0:8989` (deps fracas em `10_net.target`).
+  Controlo sem teclado = cabo RJ45 + `aios-deploy` no PC (#52).
 - O restante do espaço do cartão (se > 2 GB) fica sem uso nesta fase
   (crescer o RedoxFS é melhoria futura).

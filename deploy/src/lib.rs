@@ -10,8 +10,8 @@ pub mod validate;
 pub use deploy_protocol::{DeployConfig, DeployPlan, DeployStatus, DeployStep};
 pub use device_registry::{DeviceEntry, DeviceRegistry, DeviceStatus};
 pub use transfer::{
-    health_check, probe_device, rollback_model, transfer_model, DeviceProbe, HealthReport,
-    RollbackResult, TransferConfig, TransferResult,
+    health_check, normalize_base_url, probe_device, rollback_model, scan_subnet, transfer_model,
+    DeviceProbe, HealthReport, RollbackResult, TransferConfig, TransferResult,
 };
 pub use validate::{validate_deployment, CompatibilityCheck};
 

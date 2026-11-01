@@ -7,9 +7,15 @@
 //!   aios-deploy status <id>          show deployment status (live probe)
 //!   aios-deploy rollback <id> <model> restore the previous model version
 //!   aios-deploy validate <id> <model> validate compatibility
+//!   aios-deploy scan [prefix]        discover edge-ai nodes on a /24 LAN
+//!   aios-deploy provision <addr>     probe + register a node (RJ45 onboarding)
+//!   aios-deploy probe <addr>         live health without registering
 //!   aios-deploy help
 
-use aios_deploy::{validate_deployment, DeviceEntry, DeviceRegistry, DeviceStatus, TransferConfig};
+use aios_deploy::{
+    normalize_base_url, probe_device, scan_subnet, validate_deployment, DeviceEntry, DeviceRegistry,
+    DeviceStatus, TransferConfig,
+};
 use std::path::PathBuf;
 use std::process::exit;
 
@@ -22,6 +28,9 @@ usage:
   aios-deploy status <device-id>
   aios-deploy rollback <device-id> <model-name>
   aios-deploy validate <device-id> <model-path>
+  aios-deploy scan [prefix]          # default prefix 10.42.0 (PC↔Pi cabo)
+  aios-deploy provision <address> [--name NAME]
+  aios-deploy probe <address>
   aios-deploy help";
 
 fn main() {
@@ -38,6 +47,9 @@ fn main() {
         Some("status") => cmd_status(&args[1..]),
         Some("rollback") => cmd_rollback(&args[1..]),
         Some("validate") => cmd_validate(&args[1..]),
+        Some("scan") => cmd_scan(&args[1..]),
+        Some("provision") => cmd_provision(&args[1..]),
+        Some("probe") => cmd_probe(&args[1..]),
         Some("help" | "-h" | "--help") => {
             println!("{USAGE}");
             0
@@ -601,6 +613,193 @@ fn cmd_status(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+fn cmd_scan(args: &[String]) -> i32 {
+    let prefix = args.first().map(|s| s.as_str()).unwrap_or("10.42.0");
+    // Allow "10.42.0.0/24" or "10.42.0." as well as "10.42.0".
+    let prefix = prefix
+        .trim_end_matches('/')
+        .trim_end_matches("24")
+        .trim_end_matches('/')
+        .trim_end_matches('.')
+        .to_string();
+    let parts: Vec<&str> = prefix.split('.').collect();
+    let prefix = if parts.len() >= 3 {
+        format!("{}.{}.{}", parts[0], parts[1], parts[2])
+    } else {
+        prefix
+    };
+
+    println!("Scanning {prefix}.0/24 for edge-ai on :8989 …");
+    let hits = scan_subnet(&prefix, 8989);
+    if hits.is_empty() {
+        println!("No AIOS Edge nodes found.");
+        println!("Check: cabo RJ45, GENET/DHCP no Pi, edge-ai a escutar.");
+        return 1;
+    }
+    println!("Found {} node(s):", hits.len());
+    for (addr, probe) in &hits {
+        println!(
+            "  {addr}  {} v{}  status={}  models={}",
+            probe.service,
+            probe.version,
+            probe.status,
+            if probe.models.is_empty() {
+                "<none>".to_string()
+            } else {
+                probe.models.join(",")
+            }
+        );
+    }
+    println!("Next: aios-deploy provision <address>");
+    0
+}
+
+fn cmd_probe(args: &[String]) -> i32 {
+    let Some(address) = args.first() else {
+        eprintln!("usage: aios-deploy probe <address>");
+        return 2;
+    };
+    let base = normalize_base_url(address);
+    match probe_device(&base) {
+        Ok(p) => {
+            println!("probe {base}");
+            println!("  service: {}", p.service);
+            println!("  version: {}", p.version);
+            println!("  status:  {}", p.status);
+            println!(
+                "  models:  {}",
+                if p.models.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    p.models.join(", ")
+                }
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("probe failed: {e}");
+            1
+        }
+    }
+}
+
+fn cmd_provision(args: &[String]) -> i32 {
+    if args.is_empty() {
+        eprintln!("usage: aios-deploy provision <address> [--name NAME]");
+        return 2;
+    }
+    let address = args[0].clone();
+    let mut name = format!(
+        "pi-{}",
+        address
+            .split([':', '/'])
+            .next()
+            .unwrap_or("edge")
+            .rsplit('.')
+            .next()
+            .unwrap_or("edge")
+    );
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--name" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("--name requires a value");
+                    return 2;
+                }
+                name = args[i].clone();
+            }
+            other => {
+                eprintln!("unexpected argument: {other}");
+                return 2;
+            }
+        }
+        i += 1;
+    }
+
+    let base = normalize_base_url(&address);
+    let probe = match probe_device(&base) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("provision: device not reachable at {base}: {e}");
+            return 1;
+        }
+    };
+    if probe.service != "edge-ai" && probe.status != "ok" {
+        eprintln!(
+            "provision: unexpected service '{}' status '{}'",
+            probe.service, probe.status
+        );
+        return 1;
+    }
+
+    // Store host:port without scheme — same shape as `add` / `status`.
+    let registry_addr = base
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .to_string();
+
+    let mut reg = match DeviceRegistry::load() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error loading registry: {e}");
+            return 1;
+        }
+    };
+
+    // Update existing by name or address; otherwise add.
+    let existing_id = reg
+        .list()
+        .into_iter()
+        .find(|d| d.name == name || d.address == registry_addr)
+        .map(|d| d.id.clone());
+
+    let id = if let Some(id) = existing_id {
+        if let Some(entry) = reg.get(&id).cloned() {
+            let mut entry = entry;
+            entry.address = registry_addr.clone();
+            entry.name = name.clone();
+            entry.arch = "aarch64".into();
+            entry.os = "aios-edge".into();
+            entry.status = DeviceStatus::Online;
+            entry.models = probe.models.clone();
+            reg.upsert(entry);
+        }
+        id
+    } else {
+        let mut entry = DeviceEntry::new(
+            name.clone(),
+            registry_addr.clone(),
+            "aarch64".into(),
+            "aios-edge".into(),
+        );
+        entry.status = DeviceStatus::Online;
+        entry.models = probe.models.clone();
+        entry.ram_mb = 4096;
+        entry.storage_mb = 8192;
+        reg.add(entry)
+    };
+
+    if let Err(e) = reg.save() {
+        eprintln!("error saving registry: {e}");
+        return 1;
+    }
+
+    println!("Provisioned '{name}' ({id}) at {registry_addr}");
+    println!(
+        "  {} v{}  models={}",
+        probe.service,
+        probe.version,
+        if probe.models.is_empty() {
+            "<none>".to_string()
+        } else {
+            probe.models.join(",")
+        }
+    );
+    0
 }
 
 fn cmd_rollback(args: &[String]) -> i32 {
