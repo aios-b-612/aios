@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["ai-core", "ai-inference", "edge-sdk", "edge-ai", "cli/ai", "cli/dev", "deploy", "security"]
+members = ["ai-core", "ai-inference", "edge-sdk", "edge-ai", "cli/ai", "cli/dev", "deploy", "security", "pi4-contract"]
 exclude = ["redox-os"]
 
 [workspace.package]
