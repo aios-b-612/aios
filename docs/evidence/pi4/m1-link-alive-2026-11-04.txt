@@ -1,0 +1,5 @@
+2026-11-04T09:02:39-03:00
+enp63s0          UP             0c:cc:47:ed:6c:b8 <BROADCAST,MULTICAST,UP,LOWER_UP> 
+	Speed: 100Mb/s
+	Duplex: Full
+	Link detected: yes
