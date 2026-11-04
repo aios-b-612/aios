@@ -1,8 +1,9 @@
 # Plano: comunicação de rede no Raspberry Pi 4 (AIOS Edge)
 
-Status: **cartão flashado 2026-11-01** (md5 `4a86f6d3…`) com branding AIOS +
-`bcm2711-genetd` (TX+RX+`network.genet`, service `notify`) + `edge-ai`
-`0.0.0.0:8989`. Validação HW: cabo RJ45 + checklist abaixo.
+Status: **M1 fechado 2026-11-04** — boot login + beacons `0x88B5` no cabo
+(evidência [`evidence/pi4/m1-validated-2026-11-04.md`](evidence/pi4/m1-validated-2026-11-04.md)).
+Imagem estável: genet TX (RING_CFG/100 Mbps) + logdump SDHCI desligado.
+Próximo: M2 RX/`network.genet` (#47).
 
 ## Objetivo
 PC orquestra nós Pi pelo cabo (depois Wi‑Fi). Sem teclado/UART no Pi.
@@ -17,8 +18,8 @@ PC orquestra nós Pi pelo cabo (depois Wi‑Fi). Sem teclado/UART no Pi.
 ## Fases
 
 - **M0 / v0.1 (feito)**: boot SD → userspace → login HDMI; branding AIOS.
-- **M1 (no cartão — validar HW)**: beacons TX `0x88B5` / `AIOS-BOOT`.
-- **M2 (no cartão — validar HW)**: RX + `network.genet` → netstack/DHCP → ping.
+- **M1 (feito 2026-11-04)**: beacons TX `0x88B5` / `AIOS-BOOT` no Pi 4 real (#44).
+- **M2 (próximo)**: RX + `network.genet` → netstack/DHCP → ping (#47).
 - **C0 cluster (CLI pronta)**: `aios-deploy scan|provision|probe` no PC.
 - **M3**: OTA / shell pela rede.
 - **M4**: Wi‑Fi.

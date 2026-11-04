@@ -1,0 +1,30 @@
+# Captura PC (enp63s0), 2026-11-03 ~09:36 -03
+# sudo tcpdump -i enp63s0 -nn -c 5 'ether proto 0x88b5'
+#
+# Fonte: sessão de validação M1 (Pi em aios login:, cabo RJ45 directo).
+
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on enp63s0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+09:36:03.255889 dc:a6:32:fd:f9:6f > ff:ff:ff:ff:ff:ff, ethertype Unknown (0x88b5), length 60: 
+	0x0000:  4149 4f53 2d42 4f4f 5420 6e3d 3120 4149  AIOS-BOOT.n=1.AI
+	0x0010:  4f53 2d42 4f4f 5420 6e3d 3120 6d61 633d  OS-BOOT.n=1.mac=
+	0x0020:  6463 3a61 363a 3332 3a66 643a 6639       dc:a6:32:fd:f9
+09:36:06.113849 dc:a6:32:fd:f9:6f > ff:ff:ff:ff:ff:ff, ethertype Unknown (0x88b5), length 60: 
+	0x0000:  4149 4f53 2d42 4f4f 5420 6e3d 3220 4149  AIOS-BOOT.n=2.AI
+	0x0010:  4f53 2d42 4f4f 5420 6e3d 3220 6d61 633d  OS-BOOT.n=2.mac=
+	0x0020:  6463 3a61 363a 3332 3a66 643a 6639       dc:a6:32:fd:f9
+09:36:08.961331 dc:a6:32:fd:f9:6f > ff:ff:ff:ff:ff:ff, ethertype Unknown (0x88b5), length 60: 
+	0x0000:  4149 4f53 2d42 4f4f 5420 6e3d 3320 4149  AIOS-BOOT.n=3.AI
+	0x0010:  4f53 2d42 4f4f 5420 6e3d 3320 6d61 633d  OS-BOOT.n=3.mac=
+	0x0020:  6463 3a61 363a 3332 3a66 643a 6639       dc:a6:32:fd:f9
+09:36:11.811549 dc:a6:32:fd:f9:6f > ff:ff:ff:ff:ff:ff, ethertype Unknown (0x88b5), length 60: 
+	0x0000:  4149 4f53 2d42 4f4f 5420 6e3d 3420 4149  AIOS-BOOT.n=4.AI
+	0x0010:  4f53 2d42 4f4f 5420 6e3d 3420 6d61 633d  OS-BOOT.n=4.mac=
+	0x0020:  6463 3a61 363a 3332 3a66 643a 6639       dc:a6:32:fd:f9
+09:36:14.661785 dc:a6:32:fd:f9:6f > ff:ff:ff:ff:ff:ff, ethertype Unknown (0x88b5), length 60: 
+	0x0000:  4149 4f53 2d42 4f4f 5420 6e3d 3520 4149  AIOS-BOOT.n=5.AI
+	0x0010:  4f53 2d42 4f4f 5420 6e3d 3520 6d61 633d  OS-BOOT.n=5.mac=
+	0x0020:  6463 3a61 363a 3332 3a66 643a 6639       dc:a6:32:fd:f9
+5 packets captured
+5 packets received by filter
+0 packets dropped by kernel
