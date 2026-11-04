@@ -19,7 +19,7 @@ PC orquestra nós Pi pelo cabo (depois Wi‑Fi). Sem teclado/UART no Pi.
 
 - **M0 / v0.1 (feito)**: boot SD → userspace → login HDMI; branding AIOS.
 - **M1 (feito 2026-11-04)**: beacons TX `0x88B5` / `AIOS-BOOT` no Pi 4 real (#44).
-- **M2 (próximo)**: RX + `network.genet` → netstack/DHCP → ping (#47).
+- **M2 (em validação HW)**: RX + `network.genet` → netstack/DHCP → ping (#47); PR redox #3.
 - **C0 cluster (CLI pronta)**: `aios-deploy scan|provision|probe` no PC.
 - **M3**: OTA / shell pela rede.
 - **M4**: Wi‑Fi.
