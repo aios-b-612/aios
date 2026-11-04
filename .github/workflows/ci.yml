@@ -43,6 +43,9 @@ jobs:
       - name: Run tests
         run: cargo test --all --verbose
 
+      - name: Pi 4 regression contracts (GENET/SDHCI)
+        run: bash scripts/pi4-regression-guard.sh
+
       - name: Test CLIs
         run: |
           cargo run --bin ai -- --help

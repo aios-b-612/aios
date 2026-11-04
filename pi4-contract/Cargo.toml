@@ -1,0 +1,11 @@
+[package]
+name = "pi4-contract"
+description = "Regression contracts for AIOS Edge on Raspberry Pi 4 (GENET/SDHCI)"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
