@@ -184,9 +184,9 @@ aios/
 
 **Estado atual (Fase 3):** implementado no workspace `aios/` — `ai-core/` (crate aios-core: gguf, checksum, model, cache, registry, error), `edge-sdk/` (crate aios-sdk, stub), `cli/ai/` (bin `ai`), `scripts/build-redox.sh` (cross-build prefix), raiz com `Cargo.toml` (workspace), `.cargo/config.toml` (linker `x86_64-unknown-redox-gcc`). `developer-os/`, `edge-os/`, `deploy/`, `tools/`, `tests/` ainda são alvo de fases posteriores.
 
-**Relação com o Redox base (redox-os/redox):**
+**Relação com o Redox base ([redox-os/redox](https://github.com/redox-os/redox)):**
 
-- O Redox OS é a **base tecnológica** (kernel, userspace, toolchain prefix) consumida como dependência. O projeto é **paralelo e privado**: nenhum código, receita, perfil, config, pacote ou report (issues/MRs) é enviado ao Redox nem a repositórios de código fonte. Atualizações do upstream são consumidas passivamente quando necessário; qualquer correção local fica no nosso tree.
+- O Redox OS é a **base tecnológica** (kernel, userspace, toolchain prefix) consumida como dependência. Correções nossas não vão para o upstream. O fork de trabalho é [aios-b-612/redox](https://github.com/aios-b-612/redox), branch `dev`. O kernel está em [aios-b-612/kernel](https://github.com/aios-b-612/kernel).
 
 ---
 
