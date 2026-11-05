@@ -19,9 +19,11 @@ Prioridade: **conectividade + gestão** antes de agentes avançados.
 
 Plano de rede: [`RPI4_NET_PLAN.md`](RPI4_NET_PLAN.md).
 
-## Estado cabo (2026-11-04)
+## Estado cabo (2026-11-05)
 
-- M1 OK: login HDMI + `AIOS-BOOT` `0x88b5` (MAC `dc:a6:32:fd:f9:6f`) + link 100 Full.
+- M1 OK de novo após full flash: `aios login:` + link 100 Full.
+- Beacons `AIOS-BOOT` `0x88b5` (MAC `dc:a6:32:fd:f9:6f`) na captura de 2026-11-03.
+- M2 (`network.genet`) continua bloqueado — hang no HW; regressão em `pi4-contract`.
 - Sem teclado no Pi — só cabo + energia (#52).
 - Sem lease ainda (falta M2). Após M2:
   ```bash
